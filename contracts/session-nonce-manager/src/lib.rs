@@ -1,11 +1,5 @@
 #![no_std]
 
-//! # Session Nonce Manager Contract
-//!
-//! A foundational anti-replay primitive for write-heavy contracts and
-//! signature-based actions. Each nonce is issued for a specific `(account,
-//! purpose)` pair, tracked as active until consumed, and may be
-//! administratively revoked before use.
 
 use soroban_sdk::{contract, contractevent, contractimpl, contracttype, Address, Env, String};
 
@@ -130,7 +124,7 @@ impl SessionNonceManagerContract {
         nonce
     }
 
-    /// Consume `nonce` for `(account, purpose)`, marking it as used.
+    
     pub fn consume_nonce(env: Env, account: Address, nonce: u64, purpose: String) {
         account.require_auth();
         if purpose.len() == 0 {
