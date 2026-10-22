@@ -52,6 +52,7 @@ pub enum Error {
     InvalidInput       = 7,
     NotEligible        = 8,
     BadgeInactive      = 9,
+    AlreadyMinted      = 10,
 }
 
 // ---------------------------------------------------------------------------
@@ -170,7 +171,8 @@ impl BadgeMinter {
     /// Mint a badge for a user.
     ///
     /// The badge must exist, be active, and have remaining supply.
-    /// The user must be eligible (currently all users are eligible).
+    /// The user must be eligible (set via `set_eligible`) and must not
+    /// have already minted this badge.
     pub fn mint_badge(env: Env, user: Address, badge_id: u64, quantity: u64) -> Result<(), Error> {
         require_initialized(&env)?;
 
@@ -190,9 +192,14 @@ impl BadgeMinter {
             return Err(Error::SupplyExhausted);
         }
 
-        // Check eligibility (simplified - in real implementation this would check specific criteria)
         if !self::check_eligibility(&env, &user, badge_id) {
             return Err(Error::NotEligible);
+        }
+
+        // Reject duplicate mints: each user may mint a given badge at most once.
+        let existing_records = get_user_mint_records(&env, &user);
+        if existing_records.iter().any(|r| r.badge_id == badge_id) {
+            return Err(Error::AlreadyMinted);
         }
 
         user.require_auth();
@@ -253,6 +260,22 @@ impl BadgeMinter {
         }
         .publish(&env);
 
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // set_eligible
+    // -----------------------------------------------------------------------
+
+    /// Record whether a player is eligible to mint a badge. Admin only.
+    ///
+    /// Eligibility is per-badge and must be explicitly granted before
+    /// `mint_badge` will accept the player.
+    pub fn set_eligible(env: Env, admin: Address, player: Address, badge_id: u64, eligible: bool) -> Result<(), Error> {
+        require_initialized(&env)?;
+        require_admin(&env, &admin)?;
+
+        set_user_eligible(&env, &player, badge_id, eligible);
         Ok(())
     }
 
@@ -442,11 +465,9 @@ fn require_admin(env: &Env, caller: &Address) -> Result<(), Error> {
 }
 
 fn check_eligibility(env: &Env, user: &Address, badge_id: u64) -> bool {
-    // Simplified eligibility check - in a real implementation this would check
-    // specific criteria like achievements, level requirements, etc.
-    // For now, all users are eligible for all badges.
-    let _ = (user, badge_id); // Suppress unused warning
-    true
+    // Eligibility is recorded by the admin via `set_eligible`.
+    // A player is eligible only when explicitly marked for that badge.
+    is_user_eligible(env, user, badge_id)
 }
 
 // ---------------------------------------------------------------------------
@@ -525,6 +546,7 @@ mod test {
         );
 
         let user = Address::generate(&env);
+        client.set_eligible(&admin, &user, &1u64, &true);
         env.mock_all_auths();
         client.mint_badge(&user, &1u64, &1u64);
 
@@ -568,6 +590,7 @@ mod test {
 
         // Mint some badges
         let user = Address::generate(&env);
+        client.set_eligible(&admin, &user, &1u64, &true);
         client.mint_badge(&user, &1u64, &5u64);
 
         let snapshot = client.get_minted_supply_snapshot(&1u64);
@@ -625,6 +648,7 @@ mod test {
         );
 
         let user = Address::generate(&env);
+        client.set_eligible(&admin, &user, &1u64, &true);
         let snapshot = client.get_claim_eligibility_snapshot(&user, &1u64);
         
         assert!(snapshot.is_eligible);
@@ -664,6 +688,7 @@ mod test {
         );
 
         let user = Address::generate(&env);
+        client.set_eligible(&admin, &user, &1u64, &true);
         
         // Mint all available badges
         client.mint_badge(&user, &1u64, &5u64);
@@ -707,5 +732,73 @@ mod test {
         let snapshot = client.get_claim_eligibility_snapshot(&user, &1u64);
         assert!(!snapshot.can_mint);
         assert_eq!(snapshot.eligibility_reason, soroban_sdk::String::from_str(&env, "Badge is inactive"));
+    }
+
+    #[test]
+    fn test_eligible_mint_succeeds() {
+        let env = Env::default();
+        let (client, admin) = setup(&env);
+        env.mock_all_auths();
+
+        client.define_badge(
+            &admin,
+            &1u64,
+            &soroban_sdk::String::from_str(&env, "Test Badge"),
+            &soroban_sdk::String::from_str(&env, "A test badge"),
+            &1000u64,
+            &100i128,
+        );
+
+        let user = Address::generate(&env);
+        client.set_eligible(&admin, &user, &1u64, &true);
+        client.mint_badge(&user, &1u64, &1u64);
+
+        let badges = client.get_user_minted_badges(&user);
+        assert_eq!(badges.len(), 1);
+    }
+
+    #[test]
+    fn test_ineligible_mint_rejected() {
+        let env = Env::default();
+        let (client, admin) = setup(&env);
+        env.mock_all_auths();
+
+        client.define_badge(
+            &admin,
+            &1u64,
+            &soroban_sdk::String::from_str(&env, "Test Badge"),
+            &soroban_sdk::String::from_str(&env, "A test badge"),
+            &1000u64,
+            &100i128,
+        );
+
+        let user = Address::generate(&env);
+        // No set_eligible call — user is not eligible
+        let result = client.try_mint_badge(&user, &1u64, &1u64);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_duplicate_mint_rejected() {
+        let env = Env::default();
+        let (client, admin) = setup(&env);
+        env.mock_all_auths();
+
+        client.define_badge(
+            &admin,
+            &1u64,
+            &soroban_sdk::String::from_str(&env, "Test Badge"),
+            &soroban_sdk::String::from_str(&env, "A test badge"),
+            &1000u64,
+            &100i128,
+        );
+
+        let user = Address::generate(&env);
+        client.set_eligible(&admin, &user, &1u64, &true);
+        client.mint_badge(&user, &1u64, &1u64);
+
+        // Second mint of the same badge should fail
+        let result = client.try_mint_badge(&user, &1u64, &1u64);
+        assert!(result.is_err());
     }
 }

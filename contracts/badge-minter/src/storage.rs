@@ -14,6 +14,7 @@ pub enum DataKey {
     UserMintRecords(Address),
     TotalMinted(u64),
     BadgeActiveStatus(u64),
+    UserEligible(Address, u64),
 }
 
 // Storage TTL constants
@@ -110,6 +111,23 @@ pub fn set_badge_active_status(env: &Env, badge_id: u64, is_active: bool) {
     env.storage().persistent().set(&DataKey::BadgeActiveStatus(badge_id), &is_active);
     env.storage().persistent().extend_ttl(
         &DataKey::BadgeActiveStatus(badge_id),
+        PERSISTENT_BUMP_LEDGERS,
+        PERSISTENT_BUMP_LEDGERS,
+    );
+}
+
+pub fn is_user_eligible(env: &Env, user: &Address, badge_id: u64) -> bool {
+    env.storage()
+        .persistent()
+        .get(&DataKey::UserEligible(user.clone(), badge_id))
+        .unwrap_or(false)
+}
+
+pub fn set_user_eligible(env: &Env, user: &Address, badge_id: u64, eligible: bool) {
+    let key = DataKey::UserEligible(user.clone(), badge_id);
+    env.storage().persistent().set(&key, &eligible);
+    env.storage().persistent().extend_ttl(
+        &key,
         PERSISTENT_BUMP_LEDGERS,
         PERSISTENT_BUMP_LEDGERS,
     );
