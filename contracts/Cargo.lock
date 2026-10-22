@@ -2386,6 +2386,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "stellarcade-session-nonce-manager"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "stellarcade-settlement-queue"
 version = "0.1.0"
 dependencies = [
