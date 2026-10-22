@@ -53,6 +53,9 @@ app.use((req, res, next) => {
 });
 
 app.use('/api/games', router);
+app.use((err, req, res, _next) => {
+  res.status(err.statusCode || 500).json({ error: { message: err.message, code: err.code } });
+});
 
 describe('GET /api/games', () => {
   test('returns catalog payload without missing-module errors', async () => {
@@ -69,46 +72,14 @@ describe('GET /api/games', () => {
 });
 
 describe('POST /api/games/play', () => {
-  test('returns success through game service for coinflip', async () => {
-    GameModel.create.mockResolvedValue({ id: 1 });
-    TransactionModel.create.mockResolvedValue({ id: 1 });
-
+  test('is removed: the off-chain play simulator no longer exists', async () => {
     const res = await request(app)
       .post('/api/games/play')
       .send({ gameId: 'coinflip-duel', wager: 10, choice: 'heads' });
 
-    expect(res.status).toBe(200);
-    expect(res.body.result).toBeDefined();
-    expect(res.body.win).toBeDefined();
-    expect(res.body.txHash).toBeDefined();
-  });
-
-  test('returns success through game service for rock-paper-scissors', async () => {
-    GameModel.create.mockResolvedValue({ id: 2 });
-    TransactionModel.create.mockResolvedValue({ id: 2 });
-
-    const res = await request(app)
-      .post('/api/games/play')
-      .send({ gameType: 'rock-paper-scissors', wager: 10, choice: 'rock' });
-
-    expect(res.status).toBe(200);
-    expect(res.body.result).toBeDefined();
-    expect(res.body.win).toBeDefined();
-    expect(res.body.txHash).toBeDefined();
-  });
-
-  test('returns success through game service for minesweeper-escrow', async () => {
-    GameModel.create.mockResolvedValue({ id: 3 });
-    TransactionModel.create.mockResolvedValue({ id: 3 });
-
-    const res = await request(app)
-      .post('/api/games/play')
-      .send({ gameType: 'minesweeper-escrow', wager: 15, choice: 'clear' });
-
-    expect(res.status).toBe(200);
-    expect(res.body.result).toBeDefined();
-    expect(res.body.win).toBeDefined();
-    expect(res.body.txHash).toBeDefined();
+    expect(res.status).toBe(404);
+    expect(GameModel.create).not.toHaveBeenCalled();
+    expect(TransactionModel.create).not.toHaveBeenCalled();
   });
 });
 
@@ -228,5 +199,36 @@ describe('GET /api/games/recent', () => {
     expect(res.status).toBe(200);
     expect(res.body.page).toBe(1);
     expect(res.body.pageSize).toBe(10);
+  });
+
+  test('should filter by player address', async () => {
+    GameModel.findRecent.mockResolvedValue({
+      items: [],
+      total: 0,
+      page: 1,
+      pageSize: 10,
+    });
+
+    const player = 'G' + 'A'.repeat(55);
+    const res = await request(app).get('/api/games/recent').query({ player });
+
+    expect(res.status).toBe(200);
+    expect(GameModel.findRecent).toHaveBeenCalledWith(expect.objectContaining({ player }));
+  });
+
+  test('should return 400 for an invalid player address', async () => {
+    const res = await request(app).get('/api/games/recent').query({ player: 'not-an-address' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('INVALID_PLAYER_ADDRESS');
+    expect(GameModel.findRecent).not.toHaveBeenCalled();
+  });
+
+  test('should return 400 for a player address that is too short', async () => {
+    const res = await request(app).get('/api/games/recent').query({ player: 'GSHORT' });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe('INVALID_PLAYER_ADDRESS');
+    expect(GameModel.findRecent).not.toHaveBeenCalled();
   });
 });

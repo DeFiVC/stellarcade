@@ -1950,6 +1950,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "stellarcade-contract-address-registry"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "stellarcade-contract-circuit-breaker"
 version = "0.1.0"
 dependencies = [
@@ -2031,14 +2038,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "stellarcade-dice-roll"
-version = "0.1.0"
-dependencies = [
- "soroban-sdk",
- "stellarcade-random-generator",
-]
-
-[[package]]
 name = "stellarcade-duel-engine"
 version = "0.1.0"
 dependencies = [
@@ -2086,6 +2085,14 @@ name = "stellarcade-fee-allocator"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
+]
+
+[[package]]
+name = "stellarcade-fee-management"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+ "stellarcade-shared",
 ]
 
 [[package]]
@@ -2139,11 +2146,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "stellarcade-jackpot-pool"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "stellarcade-leaderboard"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
  "stellarcade-shared",
+]
+
+[[package]]
+name = "stellarcade-lending-pool"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
 ]
 
 [[package]]
@@ -2281,6 +2302,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "stellarcade-quest-redeemer"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "stellarcade-random-generator"
 version = "0.1.0"
 dependencies = [
@@ -2302,6 +2330,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "stellarcade-reserve-manager"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "stellarcade-revenue-split"
 version = "0.1.0"
 dependencies = [
@@ -2316,7 +2351,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "stellarcade-reward-router"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "stellarcade-reward-stream"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "stellarcade-reward-vesting"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
@@ -2415,6 +2464,13 @@ dependencies = [
 
 [[package]]
 name = "stellarcade-token-streaming"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "stellarcade-tournament-lobby"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",

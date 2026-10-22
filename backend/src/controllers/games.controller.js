@@ -2,7 +2,6 @@
  * Controller for managing all game-related API requests.
  */
 const gameService = require('../services/game.service');
-const audit = require('../services/audit.service');
 
 const getGames = async (req, res, next) => {
   try {
@@ -33,12 +32,22 @@ const getRecentGames = async (req, res, next) => {
       throw error;
     }
 
-    const { gameType, status, sortBy, sortDir } = req.query;
+    const { player, gameType, status, sortBy, sortDir } = req.query;
+
+    if (player !== undefined) {
+      if (typeof player !== 'string' || !/^[G][A-Z2-7]{55}$/.test(player)) {
+        const error = new Error('Query parameter "player" must be a valid Stellar address.');
+        error.statusCode = 400;
+        error.code = 'INVALID_PLAYER_ADDRESS';
+        throw error;
+      }
+    }
 
     const result = await gameService.getRecentGames({
       page,
       limit,
       cursor: cursor === undefined ? undefined : String(cursor),
+      player,
       gameType,
       status,
       sortBy,
@@ -51,11 +60,44 @@ const getRecentGames = async (req, res, next) => {
   }
 };
 
+const CONTRACT_ID_PATTERN = /^[C][A-Z2-7]{55}$/;
+const GAME_ID_PATTERN = /^\d{1,20}$/;
+const U64_MAX = 18446744073709551615n;
+
+const getIndexedGame = async (req, res, next) => {
+  try {
+    const { contractId, id } = req.params;
+
+    if (!CONTRACT_ID_PATTERN.test(contractId)) {
+      const error = new Error(
+        'Path parameter "contractId" must be a Stellar contract id (56 characters, C...).'
+      );
+      error.statusCode = 400;
+      error.code = 'INVALID_CONTRACT_ID';
+      throw error;
+    }
+
+    if (!GAME_ID_PATTERN.test(id) || BigInt(id) > U64_MAX) {
+      const error = new Error('Path parameter "id" must be an on-chain game id (u64, decimal).');
+      error.statusCode = 400;
+      error.code = 'INVALID_GAME_ID';
+      throw error;
+    }
+
+    // Normalise leading zeros so "007" and "7" address the same chain game.
+    const game = await gameService.getIndexedGame({ contractId, id: String(BigInt(id)) });
+    res.status(200).json(game);
+  } catch (error) {
+    next(error);
+  }
+};
+
 const getLeaderboard = async (req, res, next) => {
   try {
     const rawLimit = req.query.limit;
     const parsedLimit = rawLimit === undefined ? 10 : parseInt(rawLimit, 10);
-    const limit = Number.isNaN(parsedLimit) || parsedLimit < 1 ? 10 : parsedLimit;
+    let limit = Number.isNaN(parsedLimit) || parsedLimit < 1 ? 10 : parsedLimit;
+    limit = Math.min(limit, 100);
 
     const result = await gameService.getLeaderboard({
       gameType: req.query.game,
@@ -68,42 +110,9 @@ const getLeaderboard = async (req, res, next) => {
   }
 };
 
-const playSimpleGame = async (req, res, next) => {
-  try {
-    const { gameType, gameId, wager, amount, choice, side } = req.body;
-    const resolvedGameType = gameType || gameId || 'coin-flip';
-    const resolvedWager = wager !== undefined ? wager : amount !== undefined ? amount : 0;
-    const resolvedChoice = choice || side || 'heads';
-
-    const result = await gameService.playSimpleGame({
-      userId: req.user.id,
-      gameType: resolvedGameType,
-      wager: resolvedWager,
-      choice: resolvedChoice,
-    });
-    res.status(200).json(result);
-    audit.log({
-      actor: req.user.id,
-      action: 'game.play',
-      target: resolvedGameType,
-      payload: { gameType: resolvedGameType, wager: resolvedWager },
-      outcome: 'success',
-    });
-  } catch (error) {
-    audit.log({
-      actor: req.user?.id || 'anonymous',
-      action: 'game.play',
-      target: req.body?.gameType || req.body?.gameId || 'unknown',
-      outcome: 'failure',
-      metadata: { error: error.message },
-    });
-    next(error);
-  }
-};
-
 module.exports = {
   getGames,
   getRecentGames,
+  getIndexedGame,
   getLeaderboard,
-  playSimpleGame,
 };

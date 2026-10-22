@@ -1,7 +1,5 @@
 const express = require('express');
-const { getGames, getRecentGames, playSimpleGame } = require('../controllers/games.controller');
-const auth = require('../middleware/auth.middleware');
-const idempotency = require('../middleware/idempotency.middleware');
+const { getGames, getRecentGames, getIndexedGame } = require('../controllers/games.controller');
 const { rateLimit } = require('../middleware/rate-limit.middleware');
 
 const router = express.Router();
@@ -54,6 +52,13 @@ const routeDocs = [
         description: 'Number of games to return per page',
       },
       {
+        name: 'player',
+        in: 'query',
+        required: false,
+        schema: { type: 'string' },
+        description: 'Filter recent games by player address (Stellar G... address).',
+      },
+      {
         name: 'gameType',
         in: 'query',
         required: false,
@@ -102,41 +107,53 @@ const routeDocs = [
     },
   },
   {
-    method: 'post',
-    path: '/play',
-    operationId: 'playSimpleGame',
-    summary: 'Play a game for the authenticated user',
+    method: 'get',
+    path: '/:contractId/:id',
+    operationId: 'getIndexedGame',
+    summary: 'Fetch one indexed on-chain game by contract id and on-chain game id',
     tags: ['Games'],
-    requestBody: {
-      required: true,
-      content: {
-        'application/json': {
-          schema: { $ref: '#/components/schemas/PlayGameRequest' },
-        },
+    description:
+      'Reads the row the event indexer wrote for a single round. 404 GAME_NOT_FOUND means the ' +
+      'round is not indexed yet (or the ids are wrong), which is distinct from the backend being ' +
+      'unavailable.',
+    parameters: [
+      {
+        name: 'contractId',
+        in: 'path',
+        required: true,
+        schema: { type: 'string' },
+        description: 'Coin-flip contract id (Stellar contract address, C...).',
       },
-    },
+      {
+        name: 'id',
+        in: 'path',
+        required: true,
+        schema: { type: 'string' },
+        description: 'On-chain game id as a decimal u64 string.',
+      },
+    ],
     responses: {
       200: {
-        description: 'Game was processed successfully',
+        description: 'Indexed game returned successfully',
         content: {
           'application/json': {
-            schema: { $ref: '#/components/schemas/PlayGameResponse' },
+            schema: { $ref: '#/components/schemas/IndexedGameResponse' },
           },
         },
       },
-      401: {
-        description: 'Authentication failed',
+      400: {
+        description: 'Invalid contract id or game id',
         content: {
           'application/json': {
-            schema: { $ref: '#/components/schemas/AuthErrorResponse' },
+            schema: { $ref: '#/components/schemas/ErrorEnvelope' },
           },
         },
       },
-      409: {
-        description: 'Idempotency key conflict detected',
+      404: {
+        description: 'No game indexed for this contract id and game id',
         content: {
           'application/json': {
-            schema: { $ref: '#/components/schemas/IdempotencyConflictResponse' },
+            schema: { $ref: '#/components/schemas/ErrorEnvelope' },
           },
         },
       },
@@ -154,7 +171,7 @@ const routeDocs = [
 
 router.get('/', rateLimit('games'), getGames);
 router.get('/recent', rateLimit('games'), getRecentGames);
-router.post('/play', auth, rateLimit('games'), idempotency, playSimpleGame);
+router.get('/:contractId/:id', rateLimit('games'), getIndexedGame);
 
 module.exports = router;
 module.exports.routeDocs = routeDocs;

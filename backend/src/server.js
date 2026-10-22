@@ -32,11 +32,30 @@ const db = require('./config/database');
 const redis = require('./config/redis');
 
 /**
+ * CORS Configuration
+ * Only allow origins listed in CORS_ORIGINS (comma-separated).
+ * Requests with no Origin header (server-to-server, health checks) are allowed.
+ */
+const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:3000')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+const corsOptions = {
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    return callback(null, false);
+  },
+};
+
+/**
  * Standard Security and Utility Middleware
  */
 app.use(correlationId); // Must be very early for full request-lifecycle coverage
 app.use(helmet()); // Basic security headers
-app.use(cors()); // Enable Cross-Origin Resource Sharing
+app.use(cors(corsOptions)); // Enable Cross-Origin Resource Sharing for allowed origins only
 app.use(
   express.json({
     limit: bodySizeLimit,
@@ -64,11 +83,23 @@ app.use(errorHandler);
  */
 const PORT = process.env.PORT || 3000;
 let server;
+const workers = [];
 if (process.env.NODE_ENV !== 'test') {
   server = app.listen(PORT, () => {
     logger.info(`🚀 Stellarcade Backend is live on port ${PORT}`);
     logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
   });
+
+  // Chain workers. A misconfigured worker throws here and stops startup:
+  // running with it silently disabled would leave bets unresolved.
+  if (process.env.ORACLE_ENABLED === 'true') {
+    const { startOracleWorker } = require('./services/oracle.worker');
+    workers.push(startOracleWorker());
+  }
+  if (process.env.INDEXER_ENABLED === 'true') {
+    const { startIndexerWorker } = require('./services/indexer.worker');
+    workers.push(startIndexerWorker());
+  }
 }
 
 /**
@@ -76,6 +107,8 @@ if (process.env.NODE_ENV !== 'test') {
  */
 const gracefulShutdown = async () => {
   logger.info('SIGTERM/SIGINT received. Starting graceful shutdown...');
+
+  workers.forEach((worker) => worker.stop());
 
   // Close the server first to stop accepting new requests
   server.close(async () => {

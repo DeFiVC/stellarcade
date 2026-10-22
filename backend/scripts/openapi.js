@@ -154,21 +154,36 @@ const components = {
         totalPages: { type: 'integer' },
       },
     },
-    PlayGameRequest: {
+    IndexedGameResponse: {
       type: 'object',
-      required: ['gameType'],
+      required: ['contract_id', 'chain_game_id', 'game_type', 'status', 'result'],
       properties: {
-        gameType: { type: 'string' },
-        _amount: { type: 'number' },
-        _choice: {},
-      },
-      additionalProperties: true,
-    },
-    PlayGameResponse: {
-      type: 'object',
-      required: ['success'],
-      properties: {
-        success: { type: 'boolean' },
+        id: { type: 'integer' },
+        user_id: { type: 'integer', nullable: true },
+        game_type: { type: 'string' },
+        bet_amount: {
+          type: 'string',
+          description: 'Wager in XLM units with 7 decimals (stroops / 10^7).',
+        },
+        payout: {
+          type: 'string',
+          description: 'Payout in XLM units with 7 decimals; 0.0000000 while pending.',
+        },
+        result: { type: 'string', enum: ['win', 'loss', 'pending'] },
+        status: { type: 'string', enum: ['pending', 'resolved'] },
+        contract_id: { type: 'string' },
+        chain_game_id: { type: 'string', description: 'On-chain u64 game id, decimal string.' },
+        player_address: { type: 'string' },
+        side: { type: 'string', enum: ['heads', 'tails'] },
+        ledger: { type: 'integer', nullable: true },
+        tx_hash: { type: 'string', nullable: true, description: 'Bet-placing transaction hash.' },
+        resolve_tx_hash: {
+          type: 'string',
+          nullable: true,
+          description: 'Resolving transaction hash.',
+        },
+        resolved_at: { type: 'string', format: 'date-time', nullable: true },
+        created_at: { type: 'string', format: 'date-time' },
       },
     },
     MonetaryAmountRequest: {
@@ -482,12 +497,7 @@ function validateSpecShape(spec) {
     throw new Error(`Expected OpenAPI version 3.0.3, received ${spec.openapi}`);
   }
 
-  const protectedRoutes = [
-    '/api/games/play',
-    '/api/users/audit-logs',
-    '/api/wallet/deposit',
-    '/api/wallet/withdraw',
-  ];
+  const protectedRoutes = ['/api/users/audit-logs', '/api/wallet/deposit', '/api/wallet/withdraw'];
 
   for (const routePath of protectedRoutes) {
     const operations = spec.paths[routePath];

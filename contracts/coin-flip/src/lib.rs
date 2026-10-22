@@ -9,6 +9,12 @@
 //! 2. Oracle fulfills randomness on the RNG contract (off-chain step).
 //! 3. Anyone calls `resolve_bet` → reads RNG result, settles payout.
 //!
+//! If the oracle never fulfills the request, the player can call
+//! `cancel_stale_bet` once `RefundTimeoutLedgers` ledgers have passed since
+//! the bet was placed to reclaim the full wager. A refunded game can never
+//! be resolved afterwards, so a player gets either a refund or a payout,
+//! never both.
+//!
 //! ## House Edge
 //! Configured at init via `house_edge_bps` (basis points). A 250 bps edge
 //! means a winning bet on a 100-token wager pays 195 tokens (2x minus 5%).
@@ -17,23 +23,61 @@
 #![allow(unexpected_cfgs)]
 
 use soroban_sdk::{
-    contract, contracterror, contractevent, contractimpl, contracttype, token::TokenClient,
-    Address, Env, Vec,
+    contract, contractclient, contracterror, contractevent, contractimpl, contracttype,
+    token::TokenClient, Address, BytesN, Env, Vec,
 };
 
-use stellarcade_random_generator::RandomGeneratorClient;
+// ---------------------------------------------------------------------------
+// External Contract Client & Types
+// ---------------------------------------------------------------------------
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FulfilledEntry {
+    pub caller: Address,
+    pub max: u64,
+    pub server_seed: BytesN<32>,
+    pub result: u64,
+    pub commitment: BytesN<32>,
+}
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum RngError {
+    RequestNotFound = 6,
+}
+
+#[contractclient(name = "RandomGeneratorClient")]
+pub trait RandomGeneratorContract {
+    fn request_random(env: Env, caller: Address, request_id: u64, max: u64)
+        -> Result<(), RngError>;
+    fn get_result(env: Env, caller: Address, request_id: u64) -> Result<FulfilledEntry, RngError>;
+}
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
 pub const PERSISTENT_BUMP_LEDGERS: u32 = 518_400;
+
+/// Instance storage TTL in ledgers (~30 days at 5 s/ledger). Instance storage
+/// holds the admin, token, RNG address and wager limits; if it were archived
+/// every call would fail until someone restored it.
+pub const INSTANCE_BUMP_LEDGERS: u32 = 518_400;
+
+/// Instance TTL is only extended once it drops below this many ledgers (~15
+/// days), so busy contracts do not pay for a bump on every call.
+pub const INSTANCE_LIFETIME_THRESHOLD: u32 = 259_200;
 const BASIS_POINTS_DIVISOR: i128 = 10_000;
 pub const PLAYER_HISTORY_LIMIT: u32 = 10;
 
 /// Heads = 0, Tails = 1. RNG result % 2 maps to this.
 pub const HEADS: u32 = 0;
 pub const TAILS: u32 = 1;
+
+/// Default refund timeout set by `init`: about 24 hours at ~5 s per ledger.
+pub const DEFAULT_REFUND_TIMEOUT_LEDGERS: u32 = 17_280;
 
 // ---------------------------------------------------------------------------
 // Error types
@@ -55,6 +99,14 @@ pub enum Error {
     WagerTooLow = 10,
     WagerTooHigh = 11,
     Overflow = 12,
+    InsufficientHouseLiquidity = 13,
+    /// `cancel_stale_bet` was called before the refund timeout elapsed, or
+    /// after the RNG request was fulfilled (call `resolve_bet` instead).
+    RefundNotYetAvailable = 14,
+    /// The game's wager was already refunded via `cancel_stale_bet`.
+    GameRefunded = 15,
+    InvalidConfig = 16,
+    Paused = 17,
 }
 
 // ---------------------------------------------------------------------------
@@ -76,6 +128,23 @@ pub enum DataKey {
     ActiveGamesCount,
     /// Sum of wagers across all currently unresolved games.
     TotalActiveWager,
+    /// Ledgers after `placed_at_ledger` before a player may cancel a bet
+    /// whose randomness was never fulfilled.
+    RefundTimeoutLedgers,
+    Paused,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CoinFlipConfig {
+    pub admin: Address,
+    pub token: Address,
+    pub rng_contract: Address,
+    pub min_wager: i128,
+    pub max_wager: i128,
+    pub house_edge_bps: i128,
+    pub paused: bool,
+    pub refund_timeout_ledgers: u32,
 }
 
 #[contracttype]
@@ -87,6 +156,10 @@ pub struct Game {
     pub resolved: bool,
     pub won: bool,
     pub payout: i128,
+    /// Ledger sequence at which the bet was placed.
+    pub placed_at_ledger: u32,
+    /// True if the wager was returned via `cancel_stale_bet`.
+    pub refunded: bool,
 }
 
 #[contracttype]
@@ -144,6 +217,44 @@ pub struct BetResolved {
     pub payout: i128,
 }
 
+#[contractevent]
+pub struct BetRefunded {
+    #[topic]
+    pub game_id: u64,
+    #[topic]
+    pub player: Address,
+    pub wager: i128,
+}
+
+#[contractevent]
+pub struct HouseFunded {
+    #[topic]
+    pub admin: Address,
+    pub amount: i128,
+}
+
+#[contractevent]
+pub struct HouseWithdrawn {
+    #[topic]
+    pub admin: Address,
+    pub amount: i128,
+}
+
+#[contractevent]
+pub struct WagerLimitsUpdated {
+    #[topic]
+    pub admin: Address,
+    pub min_wager: i128,
+    pub max_wager: i128,
+}
+
+#[contractevent]
+pub struct ContractPaused {
+    #[topic]
+    pub admin: Address,
+    pub paused: bool,
+}
+
 // ---------------------------------------------------------------------------
 // Contract
 // ---------------------------------------------------------------------------
@@ -156,6 +267,8 @@ impl CoinFlip {
     /// Initialize the coin flip game.
     ///
     /// `house_edge_bps`: house edge in basis points (e.g., 250 = 2.5%).
+    /// The refund timeout for `cancel_stale_bet` is set to
+    /// `DEFAULT_REFUND_TIMEOUT_LEDGERS`.
     pub fn init(
         env: Env,
         admin: Address,
@@ -165,8 +278,16 @@ impl CoinFlip {
         max_wager: i128,
         house_edge_bps: i128,
     ) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+
         if env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::AlreadyInitialized);
+        }
+        if min_wager <= 0
+            || min_wager > max_wager
+            || !(0..BASIS_POINTS_DIVISOR).contains(&house_edge_bps)
+        {
+            return Err(Error::InvalidConfig);
         }
         admin.require_auth();
 
@@ -180,6 +301,11 @@ impl CoinFlip {
         env.storage()
             .instance()
             .set(&DataKey::HouseEdgeBps, &house_edge_bps);
+        env.storage().instance().set(
+            &DataKey::RefundTimeoutLedgers,
+            &DEFAULT_REFUND_TIMEOUT_LEDGERS,
+        );
+        env.storage().instance().set(&DataKey::Paused, &false);
         Ok(())
     }
 
@@ -194,7 +320,16 @@ impl CoinFlip {
         wager: i128,
         game_id: u64,
     ) -> Result<(), Error> {
+        extend_instance_ttl(&env);
         require_initialized(&env)?;
+        let paused: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false);
+        if paused {
+            return Err(Error::Paused);
+        }
         player.require_auth();
 
         if side != HEADS && side != TAILS {
@@ -218,9 +353,38 @@ impl CoinFlip {
             return Err(Error::GameAlreadyExists);
         }
 
-        // Transfer tokens from player to this contract
+        // Verify house has enough liquidity to cover this bet plus existing liability
+        let total_wagered: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TotalActiveWager)
+            .unwrap_or(0i128);
+        let new_total_wagered = total_wagered.checked_add(wager).ok_or(Error::Overflow)?;
+        let house_edge_bps: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::HouseEdgeBps)
+            .unwrap();
+        let max_payout_factor = (2 * BASIS_POINTS_DIVISOR)
+            .checked_sub(house_edge_bps)
+            .ok_or(Error::Overflow)?;
+        let new_max_liability = new_total_wagered
+            .checked_mul(max_payout_factor)
+            .ok_or(Error::Overflow)?
+            .checked_div(BASIS_POINTS_DIVISOR)
+            .ok_or(Error::Overflow)?;
+
         let token = get_token(&env);
-        TokenClient::new(&env, &token).transfer(&player, env.current_contract_address(), &wager);
+        let token_client = TokenClient::new(&env, &token);
+        let current_balance = token_client.balance(&env.current_contract_address());
+        let total_available = current_balance.checked_add(wager).ok_or(Error::Overflow)?;
+
+        if total_available < new_max_liability {
+            return Err(Error::InsufficientHouseLiquidity);
+        }
+
+        // Transfer tokens from player to this contract
+        token_client.transfer(&player, env.current_contract_address(), &wager);
 
         // Request randomness: max=2 gives result 0 or 1
         let rng_addr: Address = env.storage().instance().get(&DataKey::RngContract).unwrap();
@@ -238,6 +402,8 @@ impl CoinFlip {
             resolved: false,
             won: false,
             payout: 0,
+            placed_at_ledger: env.ledger().sequence(),
+            refunded: false,
         };
         env.storage().persistent().set(&game_key, &game);
         env.storage().persistent().extend_ttl(
@@ -263,6 +429,7 @@ impl CoinFlip {
     /// Resolve a game after the oracle has fulfilled the RNG request.
     /// Anyone can call this — no auth needed since the outcome is deterministic.
     pub fn resolve_bet(env: Env, game_id: u64) -> Result<(), Error> {
+        extend_instance_ttl(&env);
         require_initialized(&env)?;
 
         let game_key = DataKey::Game(game_id);
@@ -272,6 +439,9 @@ impl CoinFlip {
             .get(&game_key)
             .ok_or(Error::GameNotFound)?;
 
+        if game.refunded {
+            return Err(Error::GameRefunded);
+        }
         if game.resolved {
             return Err(Error::GameAlreadyResolved);
         }
@@ -279,7 +449,8 @@ impl CoinFlip {
         // Read RNG result — panics if not yet fulfilled
         let rng_addr: Address = env.storage().instance().get(&DataKey::RngContract).unwrap();
         let rng_client = RandomGeneratorClient::new(&env, &rng_addr);
-        let fulfilled = rng_client.try_get_result(&game_id);
+        // Requests are namespaced by caller: this contract submitted the request.
+        let fulfilled = rng_client.try_get_result(&env.current_contract_address(), &game_id);
         let entry = match fulfilled {
             Ok(Ok(e)) => e,
             _ => return Err(Error::RngNotFulfilled),
@@ -351,6 +522,87 @@ impl CoinFlip {
         Ok(())
     }
 
+    /// Cancel a bet whose randomness was never fulfilled and refund the full
+    /// wager to the player.
+    ///
+    /// Only the game's player may call this, and only once
+    /// `RefundTimeoutLedgers` ledgers have passed since `placed_at_ledger`
+    /// while the RNG request is still unfulfilled. If the RNG result is
+    /// already available the call fails with `RefundNotYetAvailable`; the
+    /// game must be settled with `resolve_bet` instead.
+    pub fn cancel_stale_bet(env: Env, player: Address, game_id: u64) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        require_initialized(&env)?;
+        player.require_auth();
+
+        let game_key = DataKey::Game(game_id);
+        let mut game: Game = env
+            .storage()
+            .persistent()
+            .get(&game_key)
+            .ok_or(Error::GameNotFound)?;
+
+        if game.player != player {
+            return Err(Error::NotAuthorized);
+        }
+        if game.refunded {
+            return Err(Error::GameRefunded);
+        }
+        if game.resolved {
+            return Err(Error::GameAlreadyResolved);
+        }
+
+        let timeout: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RefundTimeoutLedgers)
+            .unwrap_or(DEFAULT_REFUND_TIMEOUT_LEDGERS);
+        let refundable_at = game
+            .placed_at_ledger
+            .checked_add(timeout)
+            .ok_or(Error::Overflow)?;
+        if env.ledger().sequence() < refundable_at {
+            return Err(Error::RefundNotYetAvailable);
+        }
+
+        // A fulfilled RNG request means the game can be settled normally.
+        let rng_addr: Address = env.storage().instance().get(&DataKey::RngContract).unwrap();
+        if let Ok(Ok(_)) = RandomGeneratorClient::new(&env, &rng_addr)
+            .try_get_result(&env.current_contract_address(), &game_id)
+        {
+            return Err(Error::RefundNotYetAvailable);
+        }
+
+        // Mark the game settled before moving tokens.
+        game.resolved = true;
+        game.refunded = true;
+        game.won = false;
+        game.payout = 0;
+        env.storage().persistent().set(&game_key, &game);
+        env.storage().persistent().extend_ttl(
+            &game_key,
+            PERSISTENT_BUMP_LEDGERS,
+            PERSISTENT_BUMP_LEDGERS,
+        );
+
+        subtract_active_exposure(&env, game.wager);
+
+        let token = get_token(&env);
+        TokenClient::new(&env, &token).transfer(
+            &env.current_contract_address(),
+            &game.player,
+            &game.wager,
+        );
+
+        BetRefunded {
+            game_id,
+            player: game.player,
+            wager: game.wager,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
     /// View a game's state.
     pub fn get_game(env: Env, game_id: u64) -> Result<Game, Error> {
         env.storage()
@@ -401,7 +653,7 @@ impl CoinFlip {
     /// Return the current house exposure across all unresolved games.
     ///
     /// The snapshot is derived entirely from aggregate counters updated by
-    /// `place_bet` and `resolve_bet`, so it requires no off-chain scanning.
+    /// `place_bet`, `resolve_bet` and `cancel_stale_bet`, so it requires no off-chain scanning.
     /// `max_payout_liability` reflects the worst-case payout if every active
     /// game is won by the player (after applying the configured house edge).
     /// Returns zeroed fields when no games are currently active.
@@ -444,16 +696,174 @@ impl CoinFlip {
             max_payout_liability,
         })
     }
+
+    /// Fund the house bankroll. Admin only.
+    pub fn fund_house(env: Env, admin: Address, amount: i128) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        require_initialized(&env)?;
+        require_admin(&env, &admin)?;
+
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        let token = get_token(&env);
+        TokenClient::new(&env, &token).transfer(&admin, env.current_contract_address(), &amount);
+
+        HouseFunded { admin, amount }.publish(&env);
+        Ok(())
+    }
+
+    /// Withdraw from the house bankroll without dropping below current exposure liability. Admin only.
+    pub fn withdraw_house(env: Env, admin: Address, amount: i128) -> Result<(), Error> {
+        extend_instance_ttl(&env);
+        require_initialized(&env)?;
+        require_admin(&env, &admin)?;
+
+        if amount <= 0 {
+            return Err(Error::InvalidAmount);
+        }
+
+        let token = get_token(&env);
+        let token_client = TokenClient::new(&env, &token);
+        let current_balance = token_client.balance(&env.current_contract_address());
+
+        let exposure = Self::house_exposure_snapshot(env.clone())?;
+        let min_required = exposure.max_payout_liability;
+
+        let remaining = current_balance.checked_sub(amount).ok_or(Error::Overflow)?;
+
+        if remaining < min_required {
+            return Err(Error::InsufficientHouseLiquidity);
+        }
+
+        token_client.transfer(&env.current_contract_address(), &admin, &amount);
+
+        HouseWithdrawn { admin, amount }.publish(&env);
+        Ok(())
+    }
+
+    /// Read-only getter for the contract's token balance.
+    pub fn house_balance(env: Env) -> Result<i128, Error> {
+        require_initialized(&env)?;
+        let token = get_token(&env);
+        Ok(TokenClient::new(&env, &token).balance(&env.current_contract_address()))
+    }
+
+    /// Update minimum and maximum wager limits. Admin only.
+    pub fn set_wager_limits(
+        env: Env,
+        admin: Address,
+        min_wager: i128,
+        max_wager: i128,
+    ) -> Result<(), Error> {
+        require_initialized(&env)?;
+        require_admin(&env, &admin)?;
+
+        if min_wager <= 0 || min_wager > max_wager {
+            return Err(Error::InvalidConfig);
+        }
+
+        env.storage().instance().set(&DataKey::MinWager, &min_wager);
+        env.storage().instance().set(&DataKey::MaxWager, &max_wager);
+
+        WagerLimitsUpdated {
+            admin,
+            min_wager,
+            max_wager,
+        }
+        .publish(&env);
+        Ok(())
+    }
+
+    /// Pause or unpause contract operations. Admin only.
+    pub fn set_paused(env: Env, admin: Address, paused: bool) -> Result<(), Error> {
+        require_initialized(&env)?;
+        require_admin(&env, &admin)?;
+
+        env.storage().instance().set(&DataKey::Paused, &paused);
+
+        ContractPaused { admin, paused }.publish(&env);
+        Ok(())
+    }
+
+    /// Query the complete configuration snapshot of the contract.
+    pub fn get_config(env: Env) -> Result<CoinFlipConfig, Error> {
+        require_initialized(&env)?;
+
+        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let token: Address = env.storage().instance().get(&DataKey::Token).unwrap();
+        let rng_contract: Address = env.storage().instance().get(&DataKey::RngContract).unwrap();
+        let min_wager: i128 = env.storage().instance().get(&DataKey::MinWager).unwrap();
+        let max_wager: i128 = env.storage().instance().get(&DataKey::MaxWager).unwrap();
+        let house_edge_bps: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::HouseEdgeBps)
+            .unwrap();
+        let paused: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false);
+        let refund_timeout_ledgers: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RefundTimeoutLedgers)
+            .unwrap_or(DEFAULT_REFUND_TIMEOUT_LEDGERS);
+
+        Ok(CoinFlipConfig {
+            admin,
+            token,
+            rng_contract,
+            min_wager,
+            max_wager,
+            house_edge_bps,
+            paused,
+            refund_timeout_ledgers,
+        })
+    }
+
+    /// Query whether the contract is currently paused.
+    pub fn is_paused(env: Env) -> Result<bool, Error> {
+        require_initialized(&env)?;
+        Ok(env
+            .storage()
+            .instance()
+            .get(&DataKey::Paused)
+            .unwrap_or(false))
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+/// Keep the instance entry (admin, token, RNG address, wager limits) alive.
+/// Called first in every state-changing entry point.
+fn extend_instance_ttl(env: &Env) {
+    env.storage()
+        .instance()
+        .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_LEDGERS);
+}
+
 fn require_initialized(env: &Env) -> Result<(), Error> {
     if !env.storage().instance().has(&DataKey::Admin) {
         return Err(Error::NotInitialized);
     }
+    Ok(())
+}
+
+fn require_admin(env: &Env, admin: &Address) -> Result<(), Error> {
+    let stored_admin: Address = env
+        .storage()
+        .instance()
+        .get(&DataKey::Admin)
+        .ok_or(Error::NotInitialized)?;
+    if admin != &stored_admin {
+        return Err(Error::NotAuthorized);
+    }
+    admin.require_auth();
     Ok(())
 }
 
@@ -486,7 +896,7 @@ fn add_active_exposure(env: &Env, wager: i128) {
     );
 }
 
-/// Decrement aggregate exposure counters when a bet is resolved.
+/// Decrement aggregate exposure counters when a bet is resolved or refunded.
 fn subtract_active_exposure(env: &Env, wager: i128) {
     let count: u32 = env
         .storage()

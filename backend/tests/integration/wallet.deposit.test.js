@@ -15,8 +15,11 @@ jest.mock('../../src/config/redis', () => {
   return { client: mockClient, connectPromise: Promise.resolve() };
 });
 
+const mockVerifyDepositPayment = jest.fn();
 jest.mock('../../src/services/stellar.service', () => ({
   assertWalletNetwork: jest.fn(),
+  getAccountBalances: jest.fn(),
+  verifyDepositPayment: (...args) => mockVerifyDepositPayment(...args),
 }));
 
 jest.mock('../../src/middleware/auth.middleware', () => (req, res, next) => {
@@ -30,21 +33,13 @@ jest.mock('../../src/services/audit.service', () => ({
   log: jest.fn().mockResolvedValue(undefined),
 }));
 
-const mockDbUpdate = jest.fn().mockReturnThis();
-const mockDbWhere = jest.fn().mockReturnThis();
-const mockDb = jest.fn(() => ({
-  where: mockDbWhere,
-  update: mockDbUpdate,
-}));
-mockDb.fn = { now: jest.fn(() => 'NOW()') };
-jest.mock('../../src/config/database', () => mockDb);
-
+const db = require('../../src/config/database');
 const router = require('../../src/routes/wallet.routes');
-const User = require('../../src/models/User.model');
-const TransactionModel = require('../../src/models/Transaction.model');
+const audit = require('../../src/services/audit.service');
 
-jest.mock('../../src/models/User.model');
-jest.mock('../../src/models/Transaction.model');
+const WALLET = 'GALICE1234567890';
+const STARTING_BALANCE = 10;
+const VALID_HASH = '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
 
 const app = express();
 app.use(express.json());
@@ -53,58 +48,77 @@ app.use((err, req, res, _next) => {
   res.status(err.statusCode || 500).json({ error: { message: err.message, code: err.code } });
 });
 
-describe('POST /wallet/deposit', () => {
-  const originalVaultAddress = process.env.VAULT_ADDRESS;
+/**
+ * The deposit endpoint is disabled until a verified on-chain settlement flow
+ * replaces it (issue #1400): it used to credit `users.balance` with whatever
+ * the client sent, so any signed-in player could mint balance for themselves.
+ *
+ * These tests run against the real in-memory database, so "the balance is
+ * unchanged" is checked against the row that is actually stored, not against
+ * a mock that was never asked to change anything.
+ */
+describe('POST /wallet/deposit (flow disabled)', () => {
+  beforeAll(async () => {
+    await db.migrate.latest();
+  });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     jest.clearAllMocks();
-    mockDbUpdate.mockResolvedValue(1);
-  });
-
-  afterEach(() => {
-    process.env.VAULT_ADDRESS = originalVaultAddress;
-  });
-
-  test('503s with an honest error when no vault address is configured, instead of returning a fake one', async () => {
-    delete process.env.VAULT_ADDRESS;
-    User.findByWallet.mockResolvedValue({
-      id: 1,
-      wallet_address: 'GALICE1234567890',
-      balance: '10',
+    await db('transactions').del();
+    await db('users').del();
+    await db('users').insert({
+      wallet_address: WALLET,
+      username: 'alice',
+      balance: STARTING_BALANCE,
     });
-
-    const res = await request(app).post('/wallet/deposit').send({ amount: 5, asset: 'XLM' });
-
-    expect(res.status).toBe(503);
-    expect(res.body.error.code).toBe('VAULT_NOT_CONFIGURED');
   });
 
-  test('returns the real configured vault address on success, not a fabricated one', async () => {
-    // The address this used to fall back to ('GA2C5RFPE6CXENJUA67TZND6L6SXY67TZND6L6SXY67TZND6L6SXY')
-    // was 53 characters — one short of a valid 56-character Stellar G-address.
-    process.env.VAULT_ADDRESS = 'G' + 'A'.repeat(55); // 56 chars, valid G-address length
-    expect(process.env.VAULT_ADDRESS).toHaveLength(56);
-
-    User.findByWallet.mockResolvedValue({
-      id: 1,
-      wallet_address: 'GALICE1234567890',
-      balance: '10',
-    });
-    TransactionModel.create.mockResolvedValue({ id: 99, type: 'deposit', amount: 5 });
-
-    const res = await request(app).post('/wallet/deposit').send({ amount: 5, asset: 'XLM' });
-
-    expect(res.status).toBe(200);
-    expect(res.body.depositAddress).toBe(process.env.VAULT_ADDRESS);
-    expect(res.body.balance).toBe(15);
+  afterAll(async () => {
+    await db.destroy();
   });
 
-  test('404s when the authenticated wallet has no profile yet', async () => {
-    process.env.VAULT_ADDRESS = 'G' + 'A'.repeat(55); // 56 chars, valid G-address length
-    User.findByWallet.mockResolvedValue(null);
+  test('501s with WALLET_FLOW_DISABLED instead of accepting a deposit', async () => {
+    const res = await request(app).post('/wallet/deposit').send({ txHash: VALID_HASH });
 
-    const res = await request(app).post('/wallet/deposit').send({ amount: 5, asset: 'XLM' });
+    expect(res.status).toBe(501);
+    expect(res.body.error.code).toBe('WALLET_FLOW_DISABLED');
+    expect(res.body.error.message).toMatch(/not available yet/i);
+  });
 
-    expect(res.status).toBe(404);
+  test('leaves the balance exactly as it was', async () => {
+    const res = await request(app)
+      .post('/wallet/deposit')
+      .send({ txHash: VALID_HASH, amount: 999 });
+
+    expect(res.status).toBe(501);
+
+    const user = await db('users').where({ wallet_address: WALLET }).first();
+    expect(Number(user.balance)).toBe(STARTING_BALANCE);
+  });
+
+  test('writes no transaction record', async () => {
+    await request(app).post('/wallet/deposit').send({ txHash: VALID_HASH });
+
+    const transactions = await db('transactions').select('*');
+    expect(transactions).toHaveLength(0);
+  });
+
+  test('never looks the payment up on Horizon', async () => {
+    await request(app).post('/wallet/deposit').send({ txHash: VALID_HASH });
+
+    expect(mockVerifyDepositPayment).not.toHaveBeenCalled();
+  });
+
+  test('writes no audit row for a request that was never served', async () => {
+    await request(app).post('/wallet/deposit').send({ txHash: VALID_HASH });
+
+    expect(audit.log).not.toHaveBeenCalled();
+  });
+
+  test('refuses the request whatever the body says', async () => {
+    const res = await request(app).post('/wallet/deposit').send({ amount: 999 });
+
+    expect(res.status).toBe(501);
+    expect(res.body.error.code).toBe('WALLET_FLOW_DISABLED');
   });
 });

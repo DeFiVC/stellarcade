@@ -28,9 +28,8 @@ import { Command, RefreshCw } from "lucide-react";
 import { useWalletStatus } from "../hooks/useWalletStatus";
 import { ApiClient, ONCHAIN_GAMES_CATALOG } from "../services/typed-api-sdk";
 import defaultFreighterAdapter from "../services/freighter-adapter";
-import CoinFlipResultCard from "./CoinFlipResultCard";
 import Drawer from "./Drawer";
-import { CoinFlipGame, CoinFlipGameState, CoinFlipSide } from "../types/contracts/coinFlip";
+import CoinFlipPlayPanel from "./CoinFlipPlayPanel";
 import GlobalStateStore, {
   getTableDensityPreference,
   ONBOARDING_CHECKLIST_DISMISSED_FLAG,
@@ -243,10 +242,6 @@ export const GameLobby: React.FC = () => {
   );
 
   const [activePlayGame, setActivePlayGame] = useState<Game | null>(null);
-  const [playWager, setPlayWager] = useState<number>(5);
-  const [playSide, setPlaySide] = useState<CoinFlipSide>(CoinFlipSide.Heads);
-  const [isExecutingPlay, setIsExecutingPlay] = useState<boolean>(false);
-  const [activeGameResult, setActiveGameResult] = useState<CoinFlipGame | null>(null);
 
   const fetchGames = useCallback(async () => {
     try {
@@ -274,40 +269,7 @@ export const GameLobby: React.FC = () => {
 
   const handleStartPlay = useCallback((game: Game) => {
     setActivePlayGame(game);
-    setActiveGameResult(null);
   }, []);
-
-  const handleExecutePlay = useCallback(async () => {
-    if (!activePlayGame) return;
-    if (!wallet.capabilities.isConnected) {
-      // Bare connect() installs no provider (useWalletStatus only wires one
-      // up when passed explicitly) — same bug fixed for the header's wallet
-      // control (see HeaderWalletControl.tsx).
-      await wallet.connect(defaultFreighterAdapter);
-      return;
-    }
-
-    setIsExecutingPlay(true);
-    try {
-      // Simulate/execute provably fair round
-      await new Promise((resolve) => setTimeout(resolve, 800));
-
-      const isWin = Math.random() > 0.48;
-      const gameId = `cf-${Date.now().toString(16)}-${Math.random().toString(36).slice(2, 6)}`;
-      const resultGame: CoinFlipGame = {
-        id: gameId,
-        wager: `${playWager}`,
-        side: playSide,
-        status: CoinFlipGameState.Resolved,
-        winner: isWin ? wallet.address ?? "PLAYER" : "HOUSE_VAULT",
-        settledAt: Date.now(),
-      };
-
-      setActiveGameResult(resultGame);
-    } finally {
-      setIsExecutingPlay(false);
-    }
-  }, [activePlayGame, playSide, playWager, wallet]);
 
   useEffect(() => {
     const run = async () => {
@@ -1228,95 +1190,7 @@ export const GameLobby: React.FC = () => {
                 : "Instant on-chain duel backed by Stellar smart contract and SHA-256 commit-reveal."}
             </p>
 
-            {activeGameResult ? (
-              <div>
-                <CoinFlipResultCard
-                  game={activeGameResult}
-                  currentWalletAddress={wallet.address ?? undefined}
-                  onRetry={() => setActiveGameResult(null)}
-                />
-                <button
-                  type="button"
-                  onClick={() => setActiveGameResult(null)}
-                  className="stellarcade-btn stellarcade-btn-primary w-full mt-4"
-                  data-testid="btn-play-again"
-                >
-                  Play Another Round
-                </button>
-              </div>
-            ) : (
-              <div className="flex flex-col gap-4">
-                <div>
-                  <label className="block text-xs font-semibold mb-2 text-slate-300">
-                    Choose Your Pick:
-                  </label>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setPlaySide(CoinFlipSide.Heads)}
-                      className={`p-3 rounded-lg border font-bold transition-all ${
-                        playSide === CoinFlipSide.Heads
-                          ? "border-sky-400 bg-sky-400/15 text-white"
-                          : "border-white/10 bg-transparent text-slate-300 hover:border-white/20"
-                      }`}
-                      data-testid="btn-pick-heads"
-                    >
-                      🪙 Heads
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setPlaySide(CoinFlipSide.Tails)}
-                      className={`p-3 rounded-lg border font-bold transition-all ${
-                        playSide === CoinFlipSide.Tails
-                          ? "border-sky-400 bg-sky-400/15 text-white"
-                          : "border-white/10 bg-transparent text-slate-300 hover:border-white/20"
-                      }`}
-                      data-testid="btn-pick-tails"
-                    >
-                      🪙 Tails
-                    </button>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold mb-2 text-slate-300">
-                    Wager Amount (XLM):
-                  </label>
-                  <div className="grid grid-cols-4 gap-2">
-                    {[5, 10, 25, 50].map((w) => (
-                      <button
-                        key={w}
-                        type="button"
-                        onClick={() => setPlayWager(w)}
-                        className={`p-2 rounded-lg border text-xs font-semibold transition-all ${
-                          playWager === w
-                            ? "border-sky-400 bg-sky-400/15 text-white"
-                            : "border-white/10 bg-transparent text-slate-300 hover:border-white/20"
-                        }`}
-                      >
-                        {w} XLM
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="mt-2">
-                  <button
-                    type="button"
-                    onClick={handleExecutePlay}
-                    disabled={isExecutingPlay}
-                    className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-sky-400 to-teal-400 text-black font-bold text-base shadow-lg shadow-sky-400/20 hover:brightness-110 active:translate-y-0 disabled:opacity-70 disabled:cursor-not-allowed transition-all"
-                    data-testid="btn-confirm-bet"
-                  >
-                    {isExecutingPlay
-                      ? "🎲 Settling on Soroban..."
-                      : !wallet.capabilities.isConnected
-                      ? "Connect Wallet & Play"
-                      : `Place ${playWager} XLM Bet`}
-                  </button>
-                </div>
-              </div>
-            )}
+            <CoinFlipPlayPanel />
           </div>
         )}
       </Drawer>
