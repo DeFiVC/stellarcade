@@ -11,7 +11,6 @@ A central contract to track and manage player scores and rankings across differe
 ## Public Interface
 - `init(admin: Address)`: Initialize the contract with an admin.
 - `submit_score(player: Address, game_id: Symbol, score: u64)`: Submit a player's score for a specific game. Only authorized callers (admin or registered game contracts) can submit scores.
-- `update_rankings(game_id: Symbol)`: Re-sorts and updates the top players list for a game.
 - `top_players(game_id: Symbol, limit: u32)` -> `Vec<ScoreEntry>`: Returns the top ranking players for a game.
 - `player_rank(game_id: Symbol, player: Address)` -> `u32`: Returns the current rank of a player in a specific game.
 
