@@ -119,7 +119,6 @@ describe('POST /auth/login', () => {
     expect(User.create).toHaveBeenCalledWith({
       wallet_address: address,
       username: 'player',
-      balance: 0,
     });
   });
 

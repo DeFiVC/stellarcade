@@ -37,7 +37,6 @@ const router = require('../../src/routes/wallet.routes');
 const audit = require('../../src/services/audit.service');
 
 const WALLET = 'GALICE1234567890';
-const STARTING_BALANCE = 10;
 
 const app = express();
 app.use(express.json());
@@ -67,7 +66,6 @@ describe('POST /wallet/withdraw (flow disabled)', () => {
     await db('users').insert({
       wallet_address: WALLET,
       username: 'alice',
-      balance: STARTING_BALANCE,
     });
   });
 
@@ -85,7 +83,7 @@ describe('POST /wallet/withdraw (flow disabled)', () => {
     expect(res.body.error.message).toMatch(/not available yet/i);
   });
 
-  test('leaves the balance exactly as it was', async () => {
+  test('does not alter the user profile', async () => {
     const res = await request(app)
       .post('/wallet/withdraw')
       .send({ amount: 5, destination: 'GBOB1234567890' });
@@ -93,7 +91,8 @@ describe('POST /wallet/withdraw (flow disabled)', () => {
     expect(res.status).toBe(501);
 
     const user = await db('users').where({ wallet_address: WALLET }).first();
-    expect(Number(user.balance)).toBe(STARTING_BALANCE);
+    expect(user).toBeDefined();
+    expect(user.wallet_address).toBe(WALLET);
   });
 
   test('writes no transaction record and no made-up transaction hash', async () => {

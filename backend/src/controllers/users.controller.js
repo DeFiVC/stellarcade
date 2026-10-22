@@ -107,7 +107,6 @@ const createProfile = async (req, res, next) => {
       user = await User.create({
         wallet_address: walletAddress,
         username: req.body.username || 'player',
-        balance: 0,
         age_confirmed_at: req.body.ageConfirmed ? new Date() : null,
       });
     } else if (req.body.ageConfirmed && !user.age_confirmed_at) {

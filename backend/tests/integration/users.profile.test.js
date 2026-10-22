@@ -107,7 +107,6 @@ describe('POST /users/create', () => {
     expect(User.create).toHaveBeenCalledWith({
       wallet_address: 'GALICE',
       username: 'alice',
-      balance: 0,
       age_confirmed_at: null,
     });
   });

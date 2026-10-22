@@ -8,7 +8,6 @@ jest.mock('../../src/config/database', () => {
     first: jest.fn().mockResolvedValue({
       id: 1,
       wallet_address: 'GA2C5RFPE6CXENJUA67TZND6L6SXY67TZND6L6SXY67TZND6L6SXY',
-      balance: 100,
     }),
     update: jest.fn().mockResolvedValue(1),
   };
