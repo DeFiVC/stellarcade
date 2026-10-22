@@ -6,7 +6,8 @@ CONTRACTS_DIR="$REPO_ROOT/contracts"
 TARGET_DIR="$CONTRACTS_DIR/target/excluded-crates-report"
 mkdir -p "$TARGET_DIR"
 
-mapfile -t CRATES < <(python3 - "$CONTRACTS_DIR/Cargo.toml" <<'PY'
+if python3 -c 'import tomllib' 2>/dev/null; then
+  mapfile -t CRATES < <(python3 - "$CONTRACTS_DIR/Cargo.toml" <<'PY'
 import sys
 import tomllib
 
@@ -18,7 +19,10 @@ exclude = workspace.get("exclude", [])
 for crate in exclude:
     print(crate)
 PY
-)
+  )
+else
+  mapfile -t CRATES < <(grep -v "^[[:space:]]*#" "$CONTRACTS_DIR/Cargo.toml" | awk '/^exclude = \[/{f=1; next} f && /^\]/{f=0} f' | grep -o '"[^"]*"' | tr -d '"')
+fi
 
 {
   echo "## Excluded crates report"
@@ -31,6 +35,10 @@ PY
     fi
 
     crate_dir="$CONTRACTS_DIR/$crate"
+    if [[ ! -d "$crate_dir" ]]; then
+      continue
+    fi
+
     clippy_log="$TARGET_DIR/${crate}-clippy.log"
     test_log="$TARGET_DIR/${crate}-tests.log"
 
@@ -40,16 +48,16 @@ PY
 
     if ! (cd "$crate_dir" && CARGO_TARGET_DIR="$TARGET_DIR" cargo clippy --all-targets --all-features -- -D warnings >"$clippy_log" 2>&1); then
       clippy_status="fail"
-      candidate="$(grep -E 'error\\[|error:|panicked at|could not compile|failed:|E[0-9]+' "$clippy_log" | head -n 1 || true)"
+      candidate="$(grep -E 'error\[|error:|panicked at|could not compile|failed:|E[0-9]+' "$clippy_log" | head -n 1 || true)"
       if [[ -n "$candidate" ]]; then
         first_error="$candidate"
       fi
     fi
 
-    if ! (cd "$crate_dir" && CARGO_TARGET_DIR="$TARGET_DIR" cargo test --locked >"$test_log" 2>&1); then
+    if ! (cd "$crate_dir" && CARGO_TARGET_DIR="$TARGET_DIR" cargo test >"$test_log" 2>&1); then
       test_status="fail"
       if [[ "$first_error" == "—" ]]; then
-        candidate="$(grep -E 'error\\[|error:|panicked at|could not compile|failed:|E[0-9]+' "$test_log" | head -n 1 || true)"
+        candidate="$(grep -E 'error\[|error:|panicked at|could not compile|failed:|E[0-9]+' "$test_log" | head -n 1 || true)"
         if [[ -n "$candidate" ]]; then
           first_error="$candidate"
         fi
@@ -66,11 +74,13 @@ PY
   done
 } > "$TARGET_DIR/report.md"
 
-{
-  echo "## Excluded crates report"
-  echo
-  cat "$TARGET_DIR/report.md"
-} >> "$GITHUB_STEP_SUMMARY"
+if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+  {
+    echo "## Excluded crates report"
+    echo
+    cat "$TARGET_DIR/report.md"
+  } >> "$GITHUB_STEP_SUMMARY"
+fi
 
 ISSUE_TITLE="Excluded crates report"
 ISSUE_BODY="$(cat <<EOF
@@ -82,14 +92,19 @@ $(cat "$TARGET_DIR/report.md")
 EOF
 )"
 
+REPO_ARG=()
+if [[ -n "${GITHUB_REPOSITORY:-}" ]]; then
+  REPO_ARG=(--repo "$GITHUB_REPOSITORY")
+fi
+
 if command -v gh >/dev/null 2>&1; then
-  issue_number="$(gh issue list --state all --limit 50 --search "Excluded crates report" --json number,title --jq '.[] | select(.title == "Excluded crates report") | .number' | head -n 1 || true)"
+  issue_number="$(gh issue list "${REPO_ARG[@]}" --state all --limit 50 --search "Excluded crates report" --json number,title --jq '.[] | select(.title == "Excluded crates report") | .number' | head -n 1 || true)"
   if [[ -n "$issue_number" ]]; then
-    if ! gh issue edit "$issue_number" --body "$ISSUE_BODY"; then
+    if ! gh issue edit "$issue_number" "${REPO_ARG[@]}" --body "$ISSUE_BODY"; then
       echo "Warning: unable to update the tracking issue." >&2
     fi
   else
-    if ! gh issue create --title "$ISSUE_TITLE" --body "$ISSUE_BODY"; then
+    if ! gh issue create "${REPO_ARG[@]}" --title "$ISSUE_TITLE" --body "$ISSUE_BODY"; then
       echo "Warning: unable to create the tracking issue." >&2
     fi
   fi

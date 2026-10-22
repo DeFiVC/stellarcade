@@ -27,4 +27,5 @@ jobs:
       - name: Run excluded crates report
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: bash scripts/excluded-crates-report.sh
