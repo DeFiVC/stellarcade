@@ -23,16 +23,10 @@ use soroban_sdk::{
     Env, Vec,
 };
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
 
-/// Maximum number of players allowed per round.
-/// Bounds the O(n) iteration in resolve_round to a known gas budget.
 pub const MAX_PLAYERS_PER_ROUND: u32 = 500;
 
-/// Persistent storage TTL in ledgers (~30 days at 5s/ledger).
-/// Extended on every write so active round data never expires mid-game.
+
 pub const PERSISTENT_BUMP_LEDGERS: u32 = 518_400;
 
 // ---------------------------------------------------------------------------
