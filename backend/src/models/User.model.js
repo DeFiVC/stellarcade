@@ -35,20 +35,6 @@ const User = {
   },
 
   /**
-   * Get the current balance of a user.
-   * @param {number} userId
-   */
-  async getBalance(userId) {
-    try {
-      const user = await db('users').where({ id: userId }).select('balance').first();
-      return user ? user.balance : 0;
-    } catch (error) {
-      logger.error('Error in User.getBalance:', error);
-      throw error;
-    }
-  },
-
-  /**
    * Update fields on an existing user, found by wallet address.
    * @param {string} address
    * @param {object} patch
