@@ -7,10 +7,7 @@ const db = require('../config/database');
 const logger = require('../utils/logger');
 
 const User = {
-  /**
-   * Find a user by their Stellar wallet address.
-   * @param {string} address
-   */
+  
   async findByWallet(address) {
     try {
       return await db('users').where({ wallet_address: address }).first();
