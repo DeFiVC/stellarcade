@@ -106,7 +106,7 @@ impl SessionNonceManagerContract {
     /// Issue the next nonce for `(account, purpose)` and return its value.
     pub fn issue_nonce(env: Env, account: Address, purpose: String) -> u64 {
         Self::require_admin_or_account(&env, &account);
-        if purpose.len() == 0 {
+        if purpose.is_empty() {
             panic!("Invalid purpose: must not be empty");
         }
 
@@ -133,7 +133,7 @@ impl SessionNonceManagerContract {
     /// Consume `nonce` for `(account, purpose)`, marking it as used.
     pub fn consume_nonce(env: Env, account: Address, nonce: u64, purpose: String) {
         account.require_auth();
-        if purpose.len() == 0 {
+        if purpose.is_empty() {
             panic!("Invalid purpose: must not be empty");
         }
 
