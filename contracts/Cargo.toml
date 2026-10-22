@@ -103,6 +103,7 @@ members = [
     "reserve-manager",
     "number-guess",
     "reward-vesting",
+    "session-nonce-manager",
 ]
 
 exclude = [
@@ -156,7 +157,6 @@ exclude = [
     "reward-unlocker",
     "round-vouchers",
     "season-rewards-vault",
-    "session-nonce-manager",
     "speed-trivia",
     "squad-match",
     "squad-rewards",
