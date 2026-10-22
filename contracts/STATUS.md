@@ -188,7 +188,6 @@ coverage).
 | `lobby-gates` | 132 | 0 | 0 | partial |
 | `loot-crate` | 150 | 0 | 0 | partial |
 | `loot-rotation` | 115 | 0 | 0 | stub |
-| `map-rotation` | 64 | 0 | 0 | stub |
 | `map-voting` | 191 | 0 | 0 | partial |
 | `matchmaking-queue` | 326 | 0 | 0 | partial |
 | `merch-redemption` | 131 | 0 | 0 | partial |
@@ -203,7 +202,6 @@ coverage).
 | `payout-checkpoints` | 54 | 0 | 0 | stub |
 | `penalty-slashing` | 577 | 0 | 6 | implemented |
 | `perk-claims` | 133 | 0 | 0 | partial |
-| `player-rating` | 66 | 0 | 0 | stub |
 | `player-stamps` | 240 | 0 | 0 | partial |
 | `price-prediction` | 819 | 0 | 0 | partial |
 | `prize-pool` | 719 | 0 | 0 | partial |
