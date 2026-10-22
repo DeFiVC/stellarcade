@@ -106,6 +106,17 @@ fn find_seed_for_face(env: &Env, request_id: u64, desired_face: u32) -> BytesN<3
     );
 }
 
+fn commit_seed(env: &Env, rng_client: &RandomGeneratorClient, oracle: &Address, server_seed: &BytesN<32>) {
+    use soroban_sdk::{Bytes, Vec};
+    let mut commitments: Vec<BytesN<32>> = Vec::new(env);
+    let h: BytesN<32> = env
+        .crypto()
+        .sha256(&Bytes::from_slice(env, &server_seed.to_array()))
+        .into();
+    commitments.push_back(h);
+    rng_client.commit_seeds(oracle, &commitments);
+}
+
 // -------------------------------------------------------------------
 // 1. Initialization
 // -------------------------------------------------------------------
@@ -137,6 +148,7 @@ fn test_roll_stores_game() {
     let player = Address::generate(&env);
     s.token_sac.mint(&player, &500);
 
+    commit_seed(&env, &s.rng_client, &s.oracle, &seed(&env, 0));
     s.dice_client.roll(&player, &3u32, &100, &1u64);
 
     let roll = s.dice_client.get_roll(&1u64);
@@ -158,6 +170,7 @@ fn test_roll_transfers_wager_from_player() {
     let player = Address::generate(&env);
     s.token_sac.mint(&player, &500);
 
+    commit_seed(&env, &s.rng_client, &s.oracle, &seed(&env, 0));
     s.dice_client.roll(&player, &1u32, &100, &1u64);
 
     assert_eq!(tc(&env, &s.token_addr).balance(&player), 400);
@@ -179,10 +192,11 @@ fn test_resolve_win() {
     let prediction = 4u32;
     let game_id = 1u64;
 
+    // Find a seed that produces die face = prediction, commit it, then roll
+    let winning_seed = find_seed_for_face(&env, game_id, prediction);
+    commit_seed(&env, &s.rng_client, &s.oracle, &winning_seed);
     s.dice_client.roll(&player, &prediction, &100, &game_id);
 
-    // Find a seed that produces die face = prediction
-    let winning_seed = find_seed_for_face(&env, game_id, prediction);
     s.rng_client
         .fulfill_random(&s.oracle, &game_id, &winning_seed);
     s.dice_client.resolve_roll(&game_id);
@@ -214,9 +228,7 @@ fn test_resolve_loss() {
     let prediction = 3u32;
     let game_id = 2u64;
 
-    s.dice_client.roll(&player, &prediction, &100, &game_id);
-
-    // Find a seed that does NOT produce the predicted face
+    // Find a seed that does NOT produce the predicted face, commit it, then roll
     let mut losing_seed = seed(&env, 0);
     for i in 0u8..=255 {
         let test_seed = seed(&env, i);
@@ -226,6 +238,8 @@ fn test_resolve_loss() {
             break;
         }
     }
+    commit_seed(&env, &s.rng_client, &s.oracle, &losing_seed);
+    s.dice_client.roll(&player, &prediction, &100, &game_id);
 
     s.rng_client
         .fulfill_random(&s.oracle, &game_id, &losing_seed);
@@ -255,6 +269,7 @@ fn test_all_faces_valid() {
 
     for face in MIN_FACE..=MAX_FACE {
         let game_id = face as u64;
+        commit_seed(&env, &s.rng_client, &s.oracle, &seed(&env, face as u8));
         s.dice_client.roll(&player, &face, &100, &game_id);
         let roll = s.dice_client.get_roll(&game_id);
         assert_eq!(roll.prediction, face);
@@ -317,6 +332,7 @@ fn test_duplicate_game_id_rejected() {
     let player = Address::generate(&env);
     s.token_sac.mint(&player, &500);
 
+    commit_seed(&env, &s.rng_client, &s.oracle, &seed(&env, 0));
     s.dice_client.roll(&player, &1u32, &100, &1u64);
     let result = s.dice_client.try_roll(&player, &5u32, &100, &1u64);
     assert!(result.is_err());
@@ -387,6 +403,7 @@ fn test_resolve_before_rng_rejected() {
     let player = Address::generate(&env);
     s.token_sac.mint(&player, &500);
 
+    commit_seed(&env, &s.rng_client, &s.oracle, &seed(&env, 0));
     s.dice_client.roll(&player, &1u32, &100, &1u64);
 
     let result = s.dice_client.try_resolve_roll(&1u64);
@@ -406,9 +423,10 @@ fn test_double_resolve_rejected() {
     let player = Address::generate(&env);
     s.token_sac.mint(&player, &500);
 
+    let rng_seed = seed(&env, 42);
+    commit_seed(&env, &s.rng_client, &s.oracle, &rng_seed);
     s.dice_client.roll(&player, &1u32, &100, &1u64);
 
-    let rng_seed = seed(&env, 42);
     s.rng_client.fulfill_random(&s.oracle, &1u64, &rng_seed);
     s.dice_client.resolve_roll(&1u64);
 
@@ -453,7 +471,9 @@ fn test_multiple_games() {
     s.token_sac.mint(&player1, &500);
     s.token_sac.mint(&player2, &500);
 
+    commit_seed(&env, &s.rng_client, &s.oracle, &seed(&env, 0));
     s.dice_client.roll(&player1, &2u32, &100, &10u64);
+    commit_seed(&env, &s.rng_client, &s.oracle, &seed(&env, 1));
     s.dice_client.roll(&player2, &5u32, &200, &20u64);
 
     let r1 = s.dice_client.get_roll(&10u64);
@@ -482,9 +502,10 @@ fn test_die_face_mapping() {
     // Test each possible RNG result maps to the correct face
     for target_face in 1u32..=6 {
         let game_id = (100 + target_face) as u64;
+        let winning_seed = find_seed_for_face(&env, game_id, target_face);
+        commit_seed(&env, &s.rng_client, &s.oracle, &winning_seed);
         s.dice_client.roll(&player, &target_face, &10, &game_id);
 
-        let winning_seed = find_seed_for_face(&env, game_id, target_face);
         s.rng_client
             .fulfill_random(&s.oracle, &game_id, &winning_seed);
         s.dice_client.resolve_roll(&game_id);
@@ -512,9 +533,10 @@ fn test_payout_math_250bps() {
     let prediction = 2u32;
     let game_id = 50u64;
 
+    let winning_seed = find_seed_for_face(&env, game_id, prediction);
+    commit_seed(&env, &s.rng_client, &s.oracle, &winning_seed);
     s.dice_client.roll(&player, &prediction, &wager, &game_id);
 
-    let winning_seed = find_seed_for_face(&env, game_id, prediction);
     s.rng_client
         .fulfill_random(&s.oracle, &game_id, &winning_seed);
     s.dice_client.resolve_roll(&game_id);
@@ -541,6 +563,7 @@ fn test_exact_min_wager_accepted() {
     s.token_sac.mint(&player, &500);
 
     // min wager is 10
+    commit_seed(&env, &s.rng_client, &s.oracle, &seed(&env, 0));
     s.dice_client.roll(&player, &1u32, &10, &1u64);
     let roll = s.dice_client.get_roll(&1u64);
     assert_eq!(roll.wager, 10);
@@ -556,6 +579,7 @@ fn test_exact_max_wager_accepted() {
     s.token_sac.mint(&player, &5000);
 
     // max wager is 1000
+    commit_seed(&env, &s.rng_client, &s.oracle, &seed(&env, 0));
     s.dice_client.roll(&player, &6u32, &1000, &1u64);
     let roll = s.dice_client.get_roll(&1u64);
     assert_eq!(roll.wager, 1000);
@@ -600,7 +624,9 @@ fn test_updated_wager_boundaries_enforced() {
     let player = Address::generate(&env);
     s.token_sac.mint(&player, &1_000);
 
+    commit_seed(&env, &s.rng_client, &s.oracle, &seed(&env, 0));
     s.dice_client.roll(&player, &2u32, &25, &101u64);
+    commit_seed(&env, &s.rng_client, &s.oracle, &seed(&env, 1));
     s.dice_client.roll(&player, &3u32, &250, &102u64);
     assert!(s
         .dice_client
@@ -627,8 +653,9 @@ fn test_win_then_loss() {
 
     // Game 1: Win
     let prediction1 = 3u32;
-    s.dice_client.roll(&player, &prediction1, &100, &1u64);
     let win_seed = find_seed_for_face(&env, 1u64, prediction1);
+    commit_seed(&env, &s.rng_client, &s.oracle, &win_seed);
+    s.dice_client.roll(&player, &prediction1, &100, &1u64);
     s.rng_client.fulfill_random(&s.oracle, &1u64, &win_seed);
     s.dice_client.resolve_roll(&1u64);
 
@@ -637,7 +664,6 @@ fn test_win_then_loss() {
 
     // Game 2: Loss (predict something different from what the seed gives)
     let prediction2 = 2u32;
-    s.dice_client.roll(&player, &prediction2, &100, &2u64);
     // Find a seed that does NOT produce face 2
     let mut lose_seed = seed(&env, 0);
     for i in 0u8..=255 {
@@ -648,6 +674,8 @@ fn test_win_then_loss() {
             break;
         }
     }
+    commit_seed(&env, &s.rng_client, &s.oracle, &lose_seed);
+    s.dice_client.roll(&player, &prediction2, &100, &2u64);
     s.rng_client.fulfill_random(&s.oracle, &2u64, &lose_seed);
     s.dice_client.resolve_roll(&2u64);
 
@@ -668,8 +696,9 @@ fn test_predict_face_1_win() {
     let player = Address::generate(&env);
     s.token_sac.mint(&player, &500);
 
-    s.dice_client.roll(&player, &1u32, &100, &1u64);
     let winning_seed = find_seed_for_face(&env, 1u64, 1);
+    commit_seed(&env, &s.rng_client, &s.oracle, &winning_seed);
+    s.dice_client.roll(&player, &1u32, &100, &1u64);
     s.rng_client.fulfill_random(&s.oracle, &1u64, &winning_seed);
     s.dice_client.resolve_roll(&1u64);
 
@@ -687,8 +716,9 @@ fn test_predict_face_6_win() {
     let player = Address::generate(&env);
     s.token_sac.mint(&player, &500);
 
-    s.dice_client.roll(&player, &6u32, &100, &1u64);
     let winning_seed = find_seed_for_face(&env, 1u64, 6);
+    commit_seed(&env, &s.rng_client, &s.oracle, &winning_seed);
+    s.dice_client.roll(&player, &6u32, &100, &1u64);
     s.rng_client.fulfill_random(&s.oracle, &1u64, &winning_seed);
     s.dice_client.resolve_roll(&1u64);
 
@@ -713,11 +743,11 @@ fn test_loss_stores_actual_result() {
     let prediction = 4u32;
     let game_id = 7u64;
 
-    s.dice_client.roll(&player, &prediction, &100, &game_id);
-
     // Pick a seed that gives a known face different from prediction
     let target_face = if prediction == 1 { 2u32 } else { 1u32 };
     let losing_seed = find_seed_for_face(&env, game_id, target_face);
+    commit_seed(&env, &s.rng_client, &s.oracle, &losing_seed);
+    s.dice_client.roll(&player, &prediction, &100, &game_id);
 
     s.rng_client
         .fulfill_random(&s.oracle, &game_id, &losing_seed);
@@ -759,8 +789,9 @@ fn test_rolling_history_snapshot_after_resolve() {
 
     let game_id = 1u64;
     let prediction = 3u32;
-    s.dice_client.roll(&player, &prediction, &100, &game_id);
     let win_seed = find_seed_for_face(&env, game_id, prediction);
+    commit_seed(&env, &s.rng_client, &s.oracle, &win_seed);
+    s.dice_client.roll(&player, &prediction, &100, &game_id);
     s.rng_client.fulfill_random(&s.oracle, &game_id, &win_seed);
     s.dice_client.resolve_roll(&game_id);
 
@@ -800,6 +831,7 @@ fn test_cooldown_window_after_roll() {
     s.token_sac.mint(&player, &500);
 
     // Place a roll — ledger timestamp is 0 in test env, cooldown = 30s
+    commit_seed(&env, &s.rng_client, &s.oracle, &seed(&env, 0));
     s.dice_client.roll(&player, &2u32, &100, &1u64);
 
     let cw = s.dice_client.cooldown_window(&player);
