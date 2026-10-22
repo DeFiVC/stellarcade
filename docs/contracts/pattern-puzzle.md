@@ -46,7 +46,7 @@ pub fn create_puzzle(env: Env, admin: Address, round_id: u32, pattern_commitment
 `Result<(), Error>`
 
 ### `submit_solution`
-Submit a solution guess for an open round.  Each player may submit exactly once per round, up to `MAX_PLAYERS_PER_ROUND` total. The `solution` bytes are stored and compared byte-for-byte against the revealed pattern during `resolve_round`. Entry fee accounting is updated here; actual token transfer should invoke the balance contract (see TODO below).
+Submit a solution guess for an open round.  Each player may submit exactly once per round, up to `MAX_PLAYERS_PER_ROUND` total. The `solution` bytes are stored and compared byte-for-byte against the revealed pattern during `resolve_round`. Entry fee accounting is updated here, and the entry fee is transferred from the player to the contract.
 
 ```rust
 pub fn submit_solution(env: Env, player: Address, round_id: u32, solution: Bytes) -> Result<(), Error>
@@ -86,7 +86,7 @@ pub fn resolve_round(env: Env, admin: Address, round_id: u32, correct_pattern: B
 `Result<(), Error>`
 
 ### `claim_reward`
-Claim the proportional reward share for a winning submission.  Returns the reward amount (`total_pot / winner_count`). The `Claimed` flag is set before any external call to preserve reentrancy safety. Actual token transfer should invoke the prize pool contract (see TODO below).
+Claim the proportional reward share for a winning submission.  Returns the reward amount (`total_pot / winner_count`). The `Claimed` flag is set before any external call to preserve reentrancy safety. The reward tokens are transferred directly from the contract's pot to the player.
 
 ```rust
 pub fn claim_reward(env: Env, player: Address, round_id: u32) -> Result<i128, Error>

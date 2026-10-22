@@ -19,8 +19,8 @@
 #![allow(unexpected_cfgs)]
 
 use soroban_sdk::{
-    contract, contracterror, contractevent, contractimpl, contracttype, Address, Bytes, BytesN,
-    Env, Vec,
+    contract, contracterror, contractevent, contractimpl, contracttype, token::TokenClient,
+    Address, Bytes, BytesN, Env, Vec,
 };
 
 // ---------------------------------------------------------------------------
@@ -56,6 +56,7 @@ pub enum Error {
     Overflow = 11,
     CommitmentMismatch = 12,
     RoundFull = 13,
+    InsufficientFunds = 14,
 }
 
 // ---------------------------------------------------------------------------
@@ -314,8 +315,8 @@ impl PatternPuzzle {
     ///
     /// Each player may submit exactly once per round, up to `MAX_PLAYERS_PER_ROUND`
     /// total. The `solution` bytes are stored and compared byte-for-byte against the
-    /// revealed pattern during `resolve_round`. Entry fee accounting is updated here;
-    /// actual token transfer should invoke the balance contract (see TODO below).
+    /// revealed pattern during `resolve_round`. Entry fee accounting is updated here,
+    /// and the entry fee is transferred from the player to the contract.
     pub fn submit_solution(
         env: Env,
         player: Address,
@@ -363,8 +364,18 @@ impl PatternPuzzle {
             PERSISTENT_BUMP_LEDGERS,
         );
 
-        // TODO: Invoke balance_contract to transfer entry_fee from player to this contract.
-        // balance_contract_client::new(&env, &balance_contract).transfer(&player, &env.current_contract_address(), &round.entry_fee);
+        if round.entry_fee > 0 {
+            let token: Address = env
+                .storage()
+                .instance()
+                .get(&DataKey::BalanceContract)
+                .ok_or(Error::NotInitialized)?;
+            TokenClient::new(&env, &token).transfer(
+                &player,
+                env.current_contract_address(),
+                &round.entry_fee,
+            );
+        }
 
         let mut players: Vec<Address> = env
             .storage()
@@ -507,8 +518,8 @@ impl PatternPuzzle {
     /// Claim the proportional reward share for a winning submission.
     ///
     /// Returns the reward amount (`total_pot / winner_count`). The `Claimed` flag
-    /// is set before any external call to preserve reentrancy safety. Actual token
-    /// transfer should invoke the prize pool contract (see TODO below).
+    /// is set before any external call to preserve reentrancy safety. The reward
+    /// tokens are transferred directly from the contract's pot to the player.
     pub fn claim_reward(env: Env, player: Address, round_id: u32) -> Result<i128, Error> {
         player.require_auth();
 
@@ -559,8 +570,18 @@ impl PatternPuzzle {
             PERSISTENT_BUMP_LEDGERS,
         );
 
-        // TODO: Invoke prize_pool_contract to transfer `reward` tokens to `player`.
-        // prize_pool_contract_client::new(&env, &prize_pool_contract).payout(&player, &reward);
+        if reward > 0 {
+            let token: Address = env
+                .storage()
+                .instance()
+                .get(&DataKey::BalanceContract)
+                .ok_or(Error::NotInitialized)?;
+            let token_client = TokenClient::new(&env, &token);
+            if token_client.balance(&env.current_contract_address()) < reward {
+                return Err(Error::InsufficientFunds);
+            }
+            token_client.transfer(&env.current_contract_address(), &player, &reward);
+        }
 
         RewardClaimed {
             player,
@@ -688,7 +709,11 @@ impl PatternPuzzle {
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::{testutils::Address as _, Bytes, BytesN, Env};
+    use soroban_sdk::{
+        testutils::Address as _,
+        token::{StellarAssetClient, TokenClient},
+        Bytes, BytesN, Env,
+    };
 
     /// Compute SHA-256 of a byte slice using the test environment's crypto host.
     fn sha256_of(env: &Env, data: &[u8]) -> BytesN<32> {
@@ -696,18 +721,33 @@ mod test {
         env.crypto().sha256(&bytes).into()
     }
 
-    /// Register the contract and run `init`. Returns (client, admin, prize_pool, balance).
-    fn setup(env: &Env) -> (PatternPuzzleClient<'_>, Address, Address, Address) {
+    /// Register the contract and run `init`. Returns (client, admin, prize_pool, balance, sac).
+    fn setup(
+        env: &Env,
+    ) -> (
+        PatternPuzzleClient<'_>,
+        Address,
+        Address,
+        Address,
+        StellarAssetClient<'_>,
+    ) {
         let contract_id = env.register(PatternPuzzle, ());
         let client = PatternPuzzleClient::new(env, &contract_id);
         let admin = Address::generate(env);
         let prize_pool = Address::generate(env);
-        let balance = Address::generate(env);
+        let token_sac = env.register_stellar_asset_contract_v2(admin.clone());
+        let balance = token_sac.address();
 
         env.mock_all_auths();
         client.init(&admin, &prize_pool, &balance);
 
-        (client, admin, prize_pool, balance)
+        (
+            client,
+            admin,
+            prize_pool,
+            balance.clone(),
+            StellarAssetClient::new(env, &balance),
+        )
     }
 
     // ------------------------------------------------------------------
@@ -717,7 +757,7 @@ mod test {
     #[test]
     fn test_full_happy_path() {
         let env = Env::default();
-        let (client, admin, _, _) = setup(&env);
+        let (client, admin, _, balance, sac) = setup(&env);
         env.mock_all_auths();
 
         let correct: &[u8] = b"BLUE-CIRCLE";
@@ -732,8 +772,20 @@ mod test {
         let correct_bytes = Bytes::from_slice(&env, correct);
         let wrong_bytes = Bytes::from_slice(&env, b"RED-SQUARE");
 
+        sac.mint(&winner, &100);
+        sac.mint(&loser, &100);
+
+        let tc = TokenClient::new(&env, &balance);
+        assert_eq!(tc.balance(&winner), 100);
+        assert_eq!(tc.balance(&loser), 100);
+
         client.submit_solution(&winner, &round_id, &correct_bytes);
         client.submit_solution(&loser, &round_id, &wrong_bytes);
+
+        // Entry fees transferred to contract
+        assert_eq!(tc.balance(&winner), 0);
+        assert_eq!(tc.balance(&loser), 0);
+        assert_eq!(tc.balance(&client.address), 200);
 
         client.resolve_round(&admin, &round_id, &correct_bytes);
 
@@ -745,6 +797,8 @@ mod test {
         let reward = client.claim_reward(&winner, &round_id);
         assert_eq!(reward, 200);
         assert!(client.has_claimed(&round_id, &winner));
+        assert_eq!(tc.balance(&winner), 200);
+        assert_eq!(tc.balance(&client.address), 0);
     }
 
     // ------------------------------------------------------------------
@@ -754,7 +808,7 @@ mod test {
     #[test]
     fn test_create_puzzle_unauthorized() {
         let env = Env::default();
-        let (client, _, _, _) = setup(&env);
+        let (client, _, _, _, _) = setup(&env);
         env.mock_all_auths();
 
         let imposter = Address::generate(&env);
@@ -771,7 +825,7 @@ mod test {
     #[test]
     fn test_resolve_round_unauthorized() {
         let env = Env::default();
-        let (client, admin, _, _) = setup(&env);
+        let (client, admin, _, _, _) = setup(&env);
         env.mock_all_auths();
 
         let commitment = sha256_of(&env, b"PATTERN");
@@ -791,18 +845,19 @@ mod test {
     #[test]
     fn test_duplicate_submission_rejected() {
         let env = Env::default();
-        let (client, admin, _, _) = setup(&env);
+        let (client, admin, _, _, sac) = setup(&env);
         env.mock_all_auths();
 
         let commitment = sha256_of(&env, b"ANSWER");
         client.create_puzzle(&admin, &1u32, &commitment, &10i128);
 
         let player = Address::generate(&env);
+        sac.mint(&player, &20);
         let solution = Bytes::from_slice(&env, b"GUESS");
         client.submit_solution(&player, &1u32, &solution);
 
         let result = client.try_submit_solution(&player, &1u32, &solution);
-        assert!(result.is_err());
+        assert_eq!(result, Err(Ok(Error::AlreadySubmitted)));
     }
 
     // ------------------------------------------------------------------
@@ -812,7 +867,7 @@ mod test {
     #[test]
     fn test_loser_cannot_claim() {
         let env = Env::default();
-        let (client, admin, _, _) = setup(&env);
+        let (client, admin, _, _, sac) = setup(&env);
         env.mock_all_auths();
 
         let correct = b"CORRECT";
@@ -820,6 +875,7 @@ mod test {
         client.create_puzzle(&admin, &1u32, &commitment, &10i128);
 
         let loser = Address::generate(&env);
+        sac.mint(&loser, &10);
         let wrong = Bytes::from_slice(&env, b"WRONG");
         client.submit_solution(&loser, &1u32, &wrong);
 
@@ -827,7 +883,7 @@ mod test {
         client.resolve_round(&admin, &1u32, &correct_bytes);
 
         let result = client.try_claim_reward(&loser, &1u32);
-        assert!(result.is_err());
+        assert_eq!(result, Err(Ok(Error::NoRewardAvailable)));
     }
 
     // ------------------------------------------------------------------
@@ -837,7 +893,7 @@ mod test {
     #[test]
     fn test_double_claim_prevented() {
         let env = Env::default();
-        let (client, admin, _, _) = setup(&env);
+        let (client, admin, _, balance, sac) = setup(&env);
         env.mock_all_auths();
 
         let correct = b"WINNER";
@@ -845,13 +901,20 @@ mod test {
         client.create_puzzle(&admin, &1u32, &commitment, &50i128);
 
         let player = Address::generate(&env);
+        sac.mint(&player, &50);
         let correct_bytes = Bytes::from_slice(&env, correct);
         client.submit_solution(&player, &1u32, &correct_bytes);
         client.resolve_round(&admin, &1u32, &correct_bytes);
-        client.claim_reward(&player, &1u32);
+        let reward = client.claim_reward(&player, &1u32);
+        assert_eq!(reward, 50);
+
+        let tc = TokenClient::new(&env, &balance);
+        assert_eq!(tc.balance(&player), 50);
 
         let result = client.try_claim_reward(&player, &1u32);
-        assert!(result.is_err());
+        assert_eq!(result, Err(Ok(Error::AlreadyClaimed)));
+        // Balance remains unchanged after double claim attempt
+        assert_eq!(tc.balance(&player), 50);
     }
 
     // ------------------------------------------------------------------
@@ -861,7 +924,7 @@ mod test {
     #[test]
     fn test_cannot_submit_after_resolve() {
         let env = Env::default();
-        let (client, admin, _, _) = setup(&env);
+        let (client, admin, _, _, _) = setup(&env);
         env.mock_all_auths();
 
         let correct = b"FINAL";
@@ -883,7 +946,7 @@ mod test {
     #[test]
     fn test_cannot_double_resolve() {
         let env = Env::default();
-        let (client, admin, _, _) = setup(&env);
+        let (client, admin, _, _, _) = setup(&env);
         env.mock_all_auths();
 
         let correct = b"ONCE";
@@ -904,7 +967,7 @@ mod test {
     #[test]
     fn test_commitment_mismatch_rejected() {
         let env = Env::default();
-        let (client, admin, _, _) = setup(&env);
+        let (client, admin, _, _, _) = setup(&env);
         env.mock_all_auths();
 
         let commitment = sha256_of(&env, b"REAL_ANSWER");
@@ -922,7 +985,7 @@ mod test {
     #[test]
     fn test_reward_split_multiple_winners() {
         let env = Env::default();
-        let (client, admin, _, _) = setup(&env);
+        let (client, admin, _, balance, sac) = setup(&env);
         env.mock_all_auths();
 
         let correct = b"SHARED";
@@ -931,8 +994,10 @@ mod test {
 
         let winner1 = Address::generate(&env);
         let winner2 = Address::generate(&env);
-        let correct_bytes = Bytes::from_slice(&env, correct);
+        sac.mint(&winner1, &100);
+        sac.mint(&winner2, &100);
 
+        let correct_bytes = Bytes::from_slice(&env, correct);
         client.submit_solution(&winner1, &1u32, &correct_bytes);
         client.submit_solution(&winner2, &1u32, &correct_bytes);
         client.resolve_round(&admin, &1u32, &correct_bytes);
@@ -942,6 +1007,10 @@ mod test {
 
         assert_eq!(reward1, 100);
         assert_eq!(reward2, 100);
+
+        let tc = TokenClient::new(&env, &balance);
+        assert_eq!(tc.balance(&winner1), 100);
+        assert_eq!(tc.balance(&winner2), 100);
     }
 
     // ------------------------------------------------------------------
@@ -951,7 +1020,7 @@ mod test {
     #[test]
     fn test_leaderboard_snapshot() {
         let env = Env::default();
-        let (client, admin, _, _) = setup(&env);
+        let (client, admin, _, _, _) = setup(&env);
         env.mock_all_auths();
 
         let round_id: u32 = 1;
@@ -986,7 +1055,7 @@ mod test {
     #[test]
     fn test_cannot_init_twice() {
         let env = Env::default();
-        let (client, admin, prize_pool, balance) = setup(&env);
+        let (client, admin, prize_pool, balance, _) = setup(&env);
         env.mock_all_auths();
 
         let result = client.try_init(&admin, &prize_pool, &balance);
@@ -994,13 +1063,13 @@ mod test {
     }
 
     // ------------------------------------------------------------------
-    // 12. Round rejects submissions beyond MAX_PLAYERS_PER_ROUND cap
+    // 13. Round rejects submissions beyond MAX_PLAYERS_PER_ROUND cap
     // ------------------------------------------------------------------
 
     #[test]
     fn test_round_full_rejected() {
         let env = Env::default();
-        let (client, admin, _, _) = setup(&env);
+        let (client, admin, _, _, _) = setup(&env);
         env.mock_all_auths();
 
         let commitment = sha256_of(&env, b"CAP_TEST");
@@ -1018,5 +1087,42 @@ mod test {
         let solution = Bytes::from_slice(&env, b"GUESS");
         let result = client.try_submit_solution(&overflow_player, &1u32, &solution);
         assert!(result.is_err());
+    }
+
+    // ------------------------------------------------------------------
+    // 14. Claim when pot cannot cover it fails cleanly
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_claim_when_pot_insufficient_fails_cleanly() {
+        let env = Env::default();
+        let (client, admin, _, balance, sac) = setup(&env);
+        env.mock_all_auths();
+
+        let correct = b"SECRET";
+        let commitment = sha256_of(&env, correct);
+        let round_id: u32 = 1;
+        let entry_fee: i128 = 100;
+
+        client.create_puzzle(&admin, &round_id, &commitment, &entry_fee);
+
+        let winner = Address::generate(&env);
+        let correct_bytes = Bytes::from_slice(&env, correct);
+
+        sac.mint(&winner, &100);
+        client.submit_solution(&winner, &round_id, &correct_bytes);
+        client.resolve_round(&admin, &round_id, &correct_bytes);
+
+        // Drain contract pot to simulate insufficient funds
+        let tc = TokenClient::new(&env, &balance);
+        let sink = Address::generate(&env);
+        tc.transfer(&client.address, &sink, &100);
+
+        // Claiming when pot can't cover it fails cleanly with InsufficientFunds
+        let result = client.try_claim_reward(&winner, &round_id);
+        assert_eq!(result, Err(Ok(Error::InsufficientFunds)));
+
+        // Verify the claim did not go through (has_claimed remains false due to rollback)
+        assert!(!client.has_claimed(&round_id, &winner));
     }
 }

@@ -101,6 +101,8 @@ All storage uses `env.storage().instance()` for contract-lifetime persistence.
 | `InvalidAmount` | 10 | `entry_fee < 0` or empty `solution` |
 | `Overflow` | 11 | Arithmetic overflow in pot/count arithmetic |
 | `CommitmentMismatch` | 12 | `SHA-256(correct_pattern) ≠ stored commitment` |
+| `RoundFull` | 13 | Round has reached `MAX_PLAYERS_PER_ROUND` (500) |
+| `InsufficientFunds` | 14 | Contract pot balance cannot cover reward payout |
 
 ## Security
 
@@ -113,7 +115,7 @@ All storage uses `env.storage().instance()` for contract-lifetime persistence.
 
 ## Integration Assumptions
 
-- **Balance Contract**: `submit_solution` records the entry fee in `total_pot` but delegates actual token transfer to the `balance_contract`. The integration call site is marked with a `TODO` comment in the source.
-- **Prize Pool Contract**: `claim_reward` returns the reward amount but delegates actual token transfer to the `prize_pool_contract`. The integration call site is marked with a `TODO` comment in the source.
+- **Balance Contract**: `submit_solution` transfers the configured `entry_fee` from the player to the contract and accumulates `total_pot`. `claim_reward` transfers the reward share directly to winning players.
+- **Prize Pool Contract**: Address stored at init for optional routing or pool integrations.
 - **Commitment Pre-computation**: The platform backend must compute `SHA-256(correct_pattern)` off-chain (using any standard SHA-256 library) before calling `create_puzzle`.
 - **Dependencies**: Depends on Prize Pool (#2), Balance Contract (#3), and related infrastructure (#7, #8, #9) before production rollout.
