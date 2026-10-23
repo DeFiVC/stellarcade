@@ -218,10 +218,7 @@ impl Staking {
         token_client.transfer(&user, env.current_contract_address(), &amount);
 
         // Update position and state
-        position.amount = position
-            .amount
-            .checked_add(amount)
-            .ok_or(Error::Overflow)?;
+        position.amount = position.amount.checked_add(amount).ok_or(Error::Overflow)?;
         position.reward_debt = position
             .amount
             .checked_mul(state.reward_per_share_acc)
@@ -281,10 +278,7 @@ impl Staking {
             .ok_or(Error::Overflow)?;
 
         // Update position and state
-        position.amount = position
-            .amount
-            .checked_sub(amount)
-            .ok_or(Error::Overflow)?;
+        position.amount = position.amount.checked_sub(amount).ok_or(Error::Overflow)?;
         position.reward_debt = if position.amount > 0 {
             position
                 .amount

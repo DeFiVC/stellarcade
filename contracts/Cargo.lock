@@ -2415,6 +2415,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "stellarcade-speed-trivia"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "stellarcade-sponsor-lockbox"
 version = "0.1.0"
 dependencies = [
@@ -2430,6 +2437,13 @@ dependencies = [
 
 [[package]]
 name = "stellarcade-sponsorship-ledger"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "stellarcade-staking"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
@@ -2486,6 +2500,13 @@ dependencies = [
 
 [[package]]
 name = "stellarcade-tournament-lobby"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "stellarcade-tournament-system"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",

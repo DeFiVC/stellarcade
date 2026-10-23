@@ -12,8 +12,7 @@
 #![allow(unexpected_cfgs)]
 
 use soroban_sdk::{
-    contract, contracterror, contractevent, contractimpl, contracttype,
-    Address, BytesN, Env,
+    contract, contracterror, contractevent, contractimpl, contracttype, Address, BytesN, Env,
 };
 
 // ---------------------------------------------------------------------------
@@ -24,18 +23,18 @@ use soroban_sdk::{
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum Error {
-    AlreadyInitialized      = 1,
-    NotInitialized          = 2,
-    NotAuthorized           = 3,
-    InvalidAmount           = 4,
-    TournamentNotFound      = 5,
+    AlreadyInitialized = 1,
+    NotInitialized = 2,
+    NotAuthorized = 3,
+    InvalidAmount = 4,
+    TournamentNotFound = 5,
     TournamentAlreadyExists = 6,
-    TournamentNotActive     = 7,
+    TournamentNotActive = 7,
     TournamentAlreadyFinalized = 8,
-    PlayerAlreadyJoined     = 9,
-    PlayerNotJoined         = 10,
-    InvalidStateTransition  = 11,
-    Overflow                = 12,
+    PlayerAlreadyJoined = 9,
+    PlayerNotJoined = 10,
+    InvalidStateTransition = 11,
+    Overflow = 12,
 }
 
 // ---------------------------------------------------------------------------
@@ -45,8 +44,8 @@ pub enum Error {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TournamentStatus {
-    Active      = 0, // Accepting joins and results
-    Finalized   = 1, // Closed, no more changes
+    Active = 0,    // Accepting joins and results
+    Finalized = 1, // Closed, no more changes
 }
 
 #[contracttype]
@@ -159,8 +158,12 @@ impl TournamentSystem {
         }
 
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::FeeContract, &fee_contract);
-        env.storage().instance().set(&DataKey::RewardContract, &reward_contract);
+        env.storage()
+            .instance()
+            .set(&DataKey::FeeContract, &fee_contract);
+        env.storage()
+            .instance()
+            .set(&DataKey::RewardContract, &reward_contract);
 
         Ok(())
     }
@@ -191,13 +194,27 @@ impl TournamentSystem {
         };
 
         env.storage().persistent().set(&key, &data);
-        env.storage().persistent().extend_ttl(&key, PERSISTENT_BUMP_LEDGERS, PERSISTENT_BUMP_LEDGERS);
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_BUMP_LEDGERS,
+            PERSISTENT_BUMP_LEDGERS,
+        );
 
         // Initialize round 1
-        env.storage().persistent().set(&DataKey::CurrentRound(id), &1u32);
-        env.storage().persistent().set(&DataKey::RoundParticipants(id, 1), &soroban_sdk::Vec::<Address>::new(&env));
+        env.storage()
+            .persistent()
+            .set(&DataKey::CurrentRound(id), &1u32);
+        env.storage().persistent().set(
+            &DataKey::RoundParticipants(id, 1),
+            &soroban_sdk::Vec::<Address>::new(&env),
+        );
 
-        TournamentCreated { id, rules_hash, entry_fee }.publish(&env);
+        TournamentCreated {
+            id,
+            rules_hash,
+            entry_fee,
+        }
+        .publish(&env);
 
         Ok(())
     }
@@ -223,13 +240,17 @@ impl TournamentSystem {
         player.require_auth();
 
         // In this architecture, we emit the event and the fee_paid amount.
-        // Off-chain or a separate contract handles the actual transfer if 
-        // the fee_contract is just a reference. 
+        // Off-chain or a separate contract handles the actual transfer if
+        // the fee_contract is just a reference.
         // However, if we wanted to be atomic, we'd call fee_contract here.
         // Given the AchievementBadge pattern, we stick to Event-Driven.
 
         env.storage().persistent().set(&join_key, &true);
-        env.storage().persistent().extend_ttl(&join_key, PERSISTENT_BUMP_LEDGERS, PERSISTENT_BUMP_LEDGERS);
+        env.storage().persistent().extend_ttl(
+            &join_key,
+            PERSISTENT_BUMP_LEDGERS,
+            PERSISTENT_BUMP_LEDGERS,
+        );
 
         // Add to round 1 participants
         let mut participants: soroban_sdk::Vec<Address> = env
@@ -238,7 +259,9 @@ impl TournamentSystem {
             .get(&DataKey::RoundParticipants(id, 1))
             .unwrap_or(soroban_sdk::Vec::new(&env));
         participants.push_back(player.clone());
-        env.storage().persistent().set(&DataKey::RoundParticipants(id, 1), &participants);
+        env.storage()
+            .persistent()
+            .set(&DataKey::RoundParticipants(id, 1), &participants);
 
         PlayerJoined {
             id,
@@ -285,15 +308,19 @@ impl TournamentSystem {
 
         let score_key = DataKey::PlayerScore(id, round, player.clone());
         env.storage().persistent().set(&score_key, &score);
-        env.storage().persistent().extend_ttl(&score_key, PERSISTENT_BUMP_LEDGERS, PERSISTENT_BUMP_LEDGERS);
+        env.storage().persistent().extend_ttl(
+            &score_key,
+            PERSISTENT_BUMP_LEDGERS,
+            PERSISTENT_BUMP_LEDGERS,
+        );
 
         ResultRecorded { id, player, score }.publish(&env);
 
         Ok(())
     }
 
-    /// Finalize a tournament. Admin only. 
-    /// Prevents further joins or result recording. 
+    /// Finalize a tournament. Admin only.
+    /// Prevents further joins or result recording.
     pub fn finalize_tournament(env: Env, admin: Address, id: u64) -> Result<(), Error> {
         require_admin(&env, &admin)?;
 
@@ -310,7 +337,11 @@ impl TournamentSystem {
 
         tournament.status = TournamentStatus::Finalized;
         env.storage().persistent().set(&key, &tournament);
-        env.storage().persistent().extend_ttl(&key, PERSISTENT_BUMP_LEDGERS, PERSISTENT_BUMP_LEDGERS);
+        env.storage().persistent().extend_ttl(
+            &key,
+            PERSISTENT_BUMP_LEDGERS,
+            PERSISTENT_BUMP_LEDGERS,
+        );
 
         TournamentFinalized { id }.publish(&env);
 
@@ -329,11 +360,15 @@ impl TournamentSystem {
             .persistent()
             .get(&DataKey::CurrentRound(id))
             .unwrap_or(1);
-        env.storage().persistent().get(&DataKey::PlayerScore(id, round, player))
+        env.storage()
+            .persistent()
+            .get(&DataKey::PlayerScore(id, round, player))
     }
 
     pub fn is_joined(env: Env, id: u64, player: Address) -> bool {
-        env.storage().persistent().has(&DataKey::PlayerJoined(id, player))
+        env.storage()
+            .persistent()
+            .has(&DataKey::PlayerJoined(id, player))
     }
 
     pub fn get_bracket_summary(env: Env, id: u64) -> Result<BracketSummary, Error> {
@@ -342,7 +377,7 @@ impl TournamentSystem {
             .persistent()
             .get(&DataKey::CurrentRound(id))
             .ok_or(Error::TournamentNotFound)?;
-        
+
         let participants: soroban_sdk::Vec<Address> = env
             .storage()
             .persistent()
@@ -361,7 +396,7 @@ impl TournamentSystem {
             .persistent()
             .get(&DataKey::CurrentRound(id))
             .ok_or(Error::TournamentNotFound)?;
-        
+
         let mut participants: soroban_sdk::Vec<Address> = env
             .storage()
             .persistent()
@@ -370,7 +405,7 @@ impl TournamentSystem {
 
         // Sort participants for deterministic pairing
         let mut sorted_list: soroban_sdk::Vec<Address> = soroban_sdk::Vec::new(&env);
-        while participants.len() > 0 {
+        while !participants.is_empty() {
             let mut min_idx = 0;
             let mut min_val = participants.get(0).unwrap();
             for i in 1..participants.len() {
@@ -393,7 +428,10 @@ impl TournamentSystem {
             } else {
                 None
             };
-            matchups.push_back(Matchup { player1: p1, player2: p2 });
+            matchups.push_back(Matchup {
+                player1: p1,
+                player2: p2,
+            });
             i += 2;
         }
 
@@ -424,7 +462,7 @@ impl TournamentSystem {
 
         // Ceiling division: an odd participant gets a bye and counts as one match.
         let count = participants.len();
-        Ok((count + 1) / 2)
+        Ok(count.div_ceil(2))
     }
 
     /// Returns a compact summary of a participant's elimination path.
@@ -441,7 +479,11 @@ impl TournamentSystem {
             return Err(Error::TournamentNotFound);
         }
 
-        if !env.storage().persistent().has(&DataKey::PlayerJoined(id, player.clone())) {
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::PlayerJoined(id, player.clone()))
+        {
             return Err(Error::PlayerNotJoined);
         }
 
@@ -481,28 +523,36 @@ impl TournamentSystem {
 
     pub fn advance_round(env: Env, admin: Address, id: u64) -> Result<(), Error> {
         require_admin(&env, &admin)?;
-        
+
         let round: u32 = env
             .storage()
             .persistent()
             .get(&DataKey::CurrentRound(id))
             .ok_or(Error::TournamentNotFound)?;
-        
+
         let matchups = Self::get_next_matches(env.clone(), id)?;
         let mut winners: soroban_sdk::Vec<Address> = soroban_sdk::Vec::new(&env);
 
         for matchup in matchups.iter() {
             match matchup.player2 {
                 Some(p2) => {
-                    let s1 = env.storage().persistent().get::<_, u64>(&DataKey::PlayerScore(id, round, matchup.player1.clone())).unwrap_or(0);
-                    let s2 = env.storage().persistent().get::<_, u64>(&DataKey::PlayerScore(id, round, p2.clone())).unwrap_or(0);
-                    
+                    let s1 = env
+                        .storage()
+                        .persistent()
+                        .get::<_, u64>(&DataKey::PlayerScore(id, round, matchup.player1.clone()))
+                        .unwrap_or(0);
+                    let s2 = env
+                        .storage()
+                        .persistent()
+                        .get::<_, u64>(&DataKey::PlayerScore(id, round, p2.clone()))
+                        .unwrap_or(0);
+
                     if s1 >= s2 {
                         winners.push_back(matchup.player1);
                     } else {
                         winners.push_back(p2);
                     }
-                },
+                }
                 None => {
                     // Bye player automatically progresses
                     winners.push_back(matchup.player1);
@@ -511,8 +561,12 @@ impl TournamentSystem {
         }
 
         let next_round = round + 1;
-        env.storage().persistent().set(&DataKey::CurrentRound(id), &next_round);
-        env.storage().persistent().set(&DataKey::RoundParticipants(id, next_round), &winners);
+        env.storage()
+            .persistent()
+            .set(&DataKey::CurrentRound(id), &next_round);
+        env.storage()
+            .persistent()
+            .set(&DataKey::RoundParticipants(id, next_round), &winners);
 
         Ok(())
     }
@@ -542,9 +596,9 @@ fn require_admin(env: &Env, caller: &Address) -> Result<(), Error> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use soroban_sdk::{testutils::Address as _, Address, Env, BytesN};
+    use soroban_sdk::{testutils::Address as _, Address, BytesN, Env};
 
-    fn setup(env: &Env) -> (TournamentSystemClient, Address, Address, Address) {
+    fn setup(env: &Env) -> (TournamentSystemClient<'_>, Address, Address, Address) {
         let admin = Address::generate(env);
         let fee_contract = Address::generate(env);
         let reward_contract = Address::generate(env);
@@ -602,7 +656,7 @@ mod test {
 
         let player = Address::generate(&env);
         client.join_tournament(&player, &id);
-        
+
         let result = client.try_join_tournament(&player, &id);
         assert_eq!(result, Err(Ok(Error::PlayerAlreadyJoined)));
     }
@@ -663,7 +717,12 @@ mod test {
 
         let attacker = Address::generate(&env);
         env.mock_all_auths();
-        let result = client.try_create_tournament(&attacker, &1u64, &BytesN::from_array(&env, &[0u8; 32]), &0i128);
+        let result = client.try_create_tournament(
+            &attacker,
+            &1u64,
+            &BytesN::from_array(&env, &[0u8; 32]),
+            &0i128,
+        );
         assert_eq!(result, Err(Ok(Error::NotAuthorized)));
     }
 
@@ -704,7 +763,7 @@ mod test {
 
         let matches = client.get_next_matches(&id);
         assert_eq!(matches.len(), 2);
-        
+
         // Ensure pairing is deterministic by checking player addresses are present
         let m1 = matches.get(0).unwrap();
         let m2 = matches.get(1).unwrap();
