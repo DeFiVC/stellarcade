@@ -26,12 +26,10 @@ const CONTRACTS = [
   "stellarcade-coin-flip",
   "stellarcade-random-generator",
   "stellarcade-prize-pool",
+  "stellarcade-dice-roll",
 ];
 
-// dice-roll is excluded from the workspace; build via its own manifest.
-const EXCLUDED = [
-  { pkg: "stellarcade-dice-roll", dir: "dice-roll" },
-];
+const EXCLUDED = [];
 
 function parseArgs() {
   const args = process.argv.slice(2);

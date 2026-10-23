@@ -81,24 +81,6 @@ pub fn submit_score(env: Env, caller: Address, player: Address, game_id: Symbol,
 
 `Result<(), Error>`
 
-### `update_rankings`
-Explicitly request a ranking update for a game. In this implementation, it's mostly a placeholder as submit_score handles it, but can be used to re-validate the top list.
-
-```rust
-pub fn update_rankings(env: Env, game_id: Symbol) -> Result<(), Error>
-```
-
-#### Parameters
-
-| Name | Type |
-|------|------|
-| `env` | `Env` |
-| `game_id` | `Symbol` |
-
-#### Return Type
-
-`Result<(), Error>`
-
 ### `top_players`
 Get the top players for a game, up to a certain limit.
 
