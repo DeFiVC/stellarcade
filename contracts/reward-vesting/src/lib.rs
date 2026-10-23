@@ -88,11 +88,19 @@ impl RewardVestingContract {
         }
         admin.require_auth();
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::Token, &token_address);
-        env.storage().instance().set(&DataKey::NextScheduleId, &0u64);
+        env.storage()
+            .instance()
+            .set(&DataKey::Token, &token_address);
+        env.storage()
+            .instance()
+            .set(&DataKey::NextScheduleId, &0u64);
         let empty: Map<u64, VestingSchedule> = Map::new(&env);
         env.storage().instance().set(&DataKey::ScheduleMap, &empty);
-        VestingInitialized { admin, token_address }.publish(&env);
+        VestingInitialized {
+            admin,
+            token_address,
+        }
+        .publish(&env);
     }
 
     /// Create a new vesting schedule for `user`.
@@ -126,7 +134,8 @@ impl RewardVestingContract {
         // Transfer tokens from admin into the contract.
         let token_addr: Address = env.storage().instance().get(&DataKey::Token).unwrap();
         let token = token::Client::new(&env, &token_addr);
-        token.transfer(&admin, &env.current_contract_address(), &amount);
+        let contract_addr = env.current_contract_address();
+        token.transfer(&admin, &contract_addr, &amount);
 
         let schedule_id: u64 = env
             .storage()
@@ -166,7 +175,12 @@ impl RewardVestingContract {
         ids.push_back(schedule_id);
         env.storage().persistent().set(&user_key, &ids);
 
-        VestingScheduled { user, schedule_id, amount }.publish(&env);
+        VestingScheduled {
+            user,
+            schedule_id,
+            amount,
+        }
+        .publish(&env);
         schedule_id
     }
 
@@ -256,7 +270,12 @@ impl RewardVestingContract {
             token.transfer(&env.current_contract_address(), &admin, &unvested);
         }
 
-        VestingRevoked { schedule_id, user, unvested }.publish(&env);
+        VestingRevoked {
+            schedule_id,
+            user,
+            unvested,
+        }
+        .publish(&env);
         unvested
     }
 
@@ -311,11 +330,11 @@ impl RewardVestingContract {
                 if !schedule.revoked {
                     total_allocation += schedule.amount;
                     claimed_amount += schedule.claimed;
-                    
+
                     let vested = Self::vested_amount(&schedule, now);
                     let schedule_claimable = vested.saturating_sub(schedule.claimed).max(0);
                     claimable_amount += schedule_claimable;
-                    
+
                     // Check if schedule is still active (not fully vested)
                     if vested < schedule.amount {
                         has_active_schedules = true;
@@ -513,7 +532,7 @@ mod tests {
         let (env, client, _admin, _tc) = setup();
         let user = Address::generate(&env);
         let summary = client.get_vesting_summary(&user);
-        
+
         assert_eq!(summary.total_allocation, 0);
         assert_eq!(summary.claimed_amount, 0);
         assert_eq!(summary.claimable_amount, 0);
@@ -528,10 +547,10 @@ mod tests {
         let user = Address::generate(&env);
         let now = env.ledger().timestamp();
         let amount = 10_000i128;
-        
+
         client.create_vesting_schedule(&user, &amount, &now, &3600, &7200);
         let summary = client.get_vesting_summary(&user);
-        
+
         assert_eq!(summary.total_allocation, amount);
         assert_eq!(summary.claimed_amount, 0);
         assert_eq!(summary.claimable_amount, 0);
@@ -546,12 +565,12 @@ mod tests {
         let user = Address::generate(&env);
         let start = env.ledger().timestamp();
         let amount = 10_000i128;
-        
+
         client.create_vesting_schedule(&user, &amount, &start, &0, &1000);
         env.ledger().with_mut(|l| l.timestamp = start + 500);
-        
+
         let summary = client.get_vesting_summary(&user);
-        
+
         assert_eq!(summary.total_allocation, amount);
         assert_eq!(summary.claimed_amount, 0);
         assert_eq!(summary.claimable_amount, 5_000);
@@ -566,12 +585,12 @@ mod tests {
         let user = Address::generate(&env);
         let start = env.ledger().timestamp();
         let amount = 10_000i128;
-        
+
         client.create_vesting_schedule(&user, &amount, &start, &0, &1000);
         env.ledger().with_mut(|l| l.timestamp = start + 2000);
-        
+
         let summary = client.get_vesting_summary(&user);
-        
+
         assert_eq!(summary.total_allocation, amount);
         assert_eq!(summary.claimed_amount, 0);
         assert_eq!(summary.claimable_amount, amount);
@@ -586,15 +605,15 @@ mod tests {
         let user = Address::generate(&env);
         let start = env.ledger().timestamp();
         let amount = 10_000i128;
-        
+
         client.create_vesting_schedule(&user, &amount, &start, &0, &1000);
         env.ledger().with_mut(|l| l.timestamp = start + 500);
-        
+
         let claimed = client.claim_vested(&user);
         assert_eq!(claimed, 5_000);
-        
+
         let summary = client.get_vesting_summary(&user);
-        
+
         assert_eq!(summary.total_allocation, amount);
         assert_eq!(summary.claimed_amount, 5_000);
         assert_eq!(summary.claimable_amount, 0);
@@ -609,12 +628,12 @@ mod tests {
         let user = Address::generate(&env);
         let start = env.ledger().timestamp();
         let amount = 10_000i128;
-        
+
         let id = client.create_vesting_schedule(&user, &amount, &start, &0, &1000);
         client.revoke_schedule(&id);
-        
+
         let summary = client.get_vesting_summary(&user);
-        
+
         assert_eq!(summary.total_allocation, 0);
         assert_eq!(summary.claimed_amount, 0);
         assert_eq!(summary.claimable_amount, 0);
@@ -630,13 +649,13 @@ mod tests {
         let start = env.ledger().timestamp();
         let amount1 = 5_000i128;
         let amount2 = 10_000i128;
-        
+
         client.create_vesting_schedule(&user, &amount1, &start, &0, &1000);
         client.create_vesting_schedule(&user, &amount2, &start, &3600, &7200);
         env.ledger().with_mut(|l| l.timestamp = start + 500);
-        
+
         let summary = client.get_vesting_summary(&user);
-        
+
         assert_eq!(summary.total_allocation, amount1 + amount2);
         assert_eq!(summary.claimed_amount, 0);
         assert_eq!(summary.claimable_amount, 2_500); // Only first schedule has vested

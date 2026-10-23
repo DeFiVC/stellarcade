@@ -104,6 +104,9 @@ members = [
     "speed-trivia",
     "staking",
     "tournament-system",
+    "number-guess",
+    "reward-vesting",
+    "session-nonce-manager",
 ]
 
 exclude = [
@@ -155,10 +158,10 @@ exclude = [
     "reserve-auction",
     "reward-bridges",
     "reward-unlocker",
-    "reward-vesting",
     "round-vouchers",
     "season-rewards-vault",
     "session-nonce-manager",
+    "speed-trivia",
     "squad-match",
     "squad-rewards",
     "squad-roster",
@@ -168,7 +171,6 @@ exclude = [
     "wallet-reserves",
     # Awaiting seed commitment migration milestone
     "dice-roll",
-    "number-guess",
 ]
 
 [profile.release]

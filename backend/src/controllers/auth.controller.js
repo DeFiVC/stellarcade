@@ -41,7 +41,7 @@ const postLogin = async (req, res, next) => {
 
     let user = await User.findByWallet(address);
     if (!user) {
-      user = await User.create({ wallet_address: address, username: 'player', balance: 0 });
+      user = await User.create({ wallet_address: address, username: 'player' });
     }
 
     const token = authService.issueToken(user);

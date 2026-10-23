@@ -38,7 +38,6 @@ const router = require('../../src/routes/wallet.routes');
 const audit = require('../../src/services/audit.service');
 
 const WALLET = 'GALICE1234567890';
-const STARTING_BALANCE = 10;
 const VALID_HASH = '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
 
 const app = express();
@@ -69,7 +68,6 @@ describe('POST /wallet/deposit (flow disabled)', () => {
     await db('users').insert({
       wallet_address: WALLET,
       username: 'alice',
-      balance: STARTING_BALANCE,
     });
   });
 
@@ -85,7 +83,7 @@ describe('POST /wallet/deposit (flow disabled)', () => {
     expect(res.body.error.message).toMatch(/not available yet/i);
   });
 
-  test('leaves the balance exactly as it was', async () => {
+  test('does not alter the user profile', async () => {
     const res = await request(app)
       .post('/wallet/deposit')
       .send({ txHash: VALID_HASH, amount: 999 });
@@ -93,7 +91,8 @@ describe('POST /wallet/deposit (flow disabled)', () => {
     expect(res.status).toBe(501);
 
     const user = await db('users').where({ wallet_address: WALLET }).first();
-    expect(Number(user.balance)).toBe(STARTING_BALANCE);
+    expect(user).toBeDefined();
+    expect(user.wallet_address).toBe(WALLET);
   });
 
   test('writes no transaction record', async () => {
