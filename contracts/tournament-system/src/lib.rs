@@ -774,7 +774,7 @@ mod test {
         client.join_tournament(&p4, &id);
 
         // 4 participants → 2 matches
-        assert_eq!(client.remaining_match_count(&id), Ok(2));
+        assert_eq!(client.remaining_match_count(&id), 2);
     }
 
     #[test]
@@ -794,7 +794,7 @@ mod test {
         client.join_tournament(&p3, &id);
 
         // 3 participants → 2 matches (one bye)
-        assert_eq!(client.remaining_match_count(&id), Ok(2));
+        assert_eq!(client.remaining_match_count(&id), 2);
     }
 
     #[test]
@@ -810,7 +810,7 @@ mod test {
         client.join_tournament(&p1, &id);
 
         // 1 participant → 1 match (bye)
-        assert_eq!(client.remaining_match_count(&id), Ok(1));
+        assert_eq!(client.remaining_match_count(&id), 1);
     }
 
     #[test]
@@ -838,7 +838,7 @@ mod test {
         let player = Address::generate(&env);
         client.join_tournament(&player, &id);
 
-        let path = client.elimination_path(&id, &player).expect("path present");
+        let path = client.elimination_path(&id, &player);
         assert_eq!(path.rounds_played, 1);
         assert_eq!(path.last_round_active, 1);
         assert!(path.is_active);
@@ -864,13 +864,13 @@ mod test {
         client.advance_round(&admin, &id);
 
         // loser was in round 1 but not round 2
-        let path = client.elimination_path(&id, &loser).expect("path");
+        let path = client.elimination_path(&id, &loser);
         assert_eq!(path.rounds_played, 1);
         assert_eq!(path.last_round_active, 1);
         assert!(!path.is_active);
 
         // winner is now in round 2
-        let winner_path = client.elimination_path(&id, &winner).expect("winner path");
+        let winner_path = client.elimination_path(&id, &winner);
         assert_eq!(winner_path.rounds_played, 2);
         assert_eq!(winner_path.last_round_active, 2);
         assert!(winner_path.is_active);
