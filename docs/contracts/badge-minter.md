@@ -44,7 +44,7 @@ pub fn define_badge(env: Env, admin: Address, badge_id: u64, name: String, descr
 `Result<(), Error>`
 
 ### `mint_badge`
-Mint a badge for a user.  The badge must exist, be active, and have remaining supply. The user must be eligible (currently all users are eligible).
+Mint a badge for a user.  The badge must exist, be active, and have remaining supply. The user must be eligible (set via `set_eligible`) and must not have already minted this badge.
 
 ```rust
 pub fn mint_badge(env: Env, user: Address, badge_id: u64, quantity: u64) -> Result<(), Error>
@@ -78,6 +78,27 @@ pub fn set_badge_status(env: Env, admin: Address, badge_id: u64, is_active: bool
 | `admin` | `Address` |
 | `badge_id` | `u64` |
 | `is_active` | `bool` |
+
+#### Return Type
+
+`Result<(), Error>`
+
+### `set_eligible`
+Record whether a player is eligible to mint a badge. Admin only.  Eligibility is per-badge and must be explicitly granted before `mint_badge` will accept the player.
+
+```rust
+pub fn set_eligible(env: Env, admin: Address, player: Address, badge_id: u64, eligible: bool) -> Result<(), Error>
+```
+
+#### Parameters
+
+| Name | Type |
+|------|------|
+| `env` | `Env` |
+| `admin` | `Address` |
+| `player` | `Address` |
+| `badge_id` | `u64` |
+| `eligible` | `bool` |
 
 #### Return Type
 

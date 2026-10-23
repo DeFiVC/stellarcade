@@ -2,11 +2,33 @@
 #![allow(unexpected_cfgs)]
 
 use soroban_sdk::{
-    contract, contracterror, contractevent, contractimpl, contracttype, token::TokenClient,
-    Address, Env, Vec,
+    contract, contractclient, contracterror, contractevent, contractimpl, contracttype,
+    token::TokenClient, Address, BytesN, Env, Vec,
 };
 
-use stellarcade_random_generator::RandomGeneratorClient;
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FulfilledEntry {
+    pub caller: Address,
+    pub max: u64,
+    pub server_seed: BytesN<32>,
+    pub result: u64,
+    pub commitment: BytesN<32>,
+}
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum RngError {
+    RequestNotFound = 6,
+}
+
+#[contractclient(name = "RandomGeneratorClient")]
+pub trait RandomGeneratorContract {
+    fn request_random(env: Env, caller: Address, request_id: u64, max: u64)
+        -> Result<(), RngError>;
+    fn get_result(env: Env, caller: Address, request_id: u64) -> Result<FulfilledEntry, RngError>;
+}
 
 // ---------------------------------------------------------------------------
 // Constants

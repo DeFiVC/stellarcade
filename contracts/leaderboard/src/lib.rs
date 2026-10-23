@@ -196,16 +196,6 @@ impl LeaderboardContract {
         Ok(())
     }
 
-    /// Explicitly request a ranking update for a game.
-    /// In this implementation, it's mostly a placeholder as submit_score handles it,
-    /// but can be used to re-validate the top list.
-    pub fn update_rankings(env: Env, game_id: Symbol) -> Result<(), Error> {
-        // Placeholder for batch updates or re-sorting if needed.
-        // Currently, submit_score keeps it sorted.
-        LeaderboardUpdated { game_id }.publish(&env);
-        Ok(())
-    }
-
     /// Get the top players for a game, up to a certain limit.
     pub fn top_players(env: Env, game_id: Symbol, limit: u32) -> Result<Vec<ScoreEntry>, Error> {
         if limit == 0 || limit > MAX_LEADERBOARD_SIZE {
