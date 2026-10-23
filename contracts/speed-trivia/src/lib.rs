@@ -602,7 +602,7 @@ fn read_leaderboard(env: &Env, round_id: u64) -> soroban_sdk::Vec<LeaderboardEnt
     // Order by timestamp asc, then by player address (stable tie-break).
     let mut working = raw;
     let mut sorted: soroban_sdk::Vec<LeaderboardEntry> = soroban_sdk::Vec::new(env);
-    while working.len() > 0 {
+    while !working.is_empty() {
         let mut best_idx: u32 = 0;
         let mut best = working.get(0).unwrap();
 
