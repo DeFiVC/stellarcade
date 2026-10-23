@@ -25,6 +25,7 @@ fn seed(env: &Env, byte: u8) -> BytesN<32> {
 }
 
 struct Setup<'a> {
+    dice_id: Address,
     dice_client: DiceRollClient<'a>,
     rng_client: RandomGeneratorClient<'a>,
     admin: Address,
@@ -61,6 +62,7 @@ fn setup(env: &Env) -> Setup<'_> {
     token_sac.mint(&dice_id, &100_000i128);
 
     Setup {
+        dice_id,
         dice_client,
         rng_client,
         admin,
@@ -106,7 +108,12 @@ fn find_seed_for_face(env: &Env, request_id: u64, desired_face: u32) -> BytesN<3
     );
 }
 
-fn commit_seed(env: &Env, rng_client: &RandomGeneratorClient, oracle: &Address, server_seed: &BytesN<32>) {
+fn commit_seed(
+    env: &Env,
+    rng_client: &RandomGeneratorClient,
+    oracle: &Address,
+    server_seed: &BytesN<32>,
+) {
     use soroban_sdk::{Bytes, Vec};
     let mut commitments: Vec<BytesN<32>> = Vec::new(env);
     let h: BytesN<32> = env
@@ -198,7 +205,7 @@ fn test_resolve_win() {
     s.dice_client.roll(&player, &prediction, &100, &game_id);
 
     s.rng_client
-        .fulfill_random(&s.oracle, &game_id, &winning_seed);
+        .fulfill_random(&s.oracle, &s.dice_id, &game_id, &winning_seed);
     s.dice_client.resolve_roll(&game_id);
 
     let roll = s.dice_client.get_roll(&game_id);
@@ -242,7 +249,7 @@ fn test_resolve_loss() {
     s.dice_client.roll(&player, &prediction, &100, &game_id);
 
     s.rng_client
-        .fulfill_random(&s.oracle, &game_id, &losing_seed);
+        .fulfill_random(&s.oracle, &s.dice_id, &game_id, &losing_seed);
     s.dice_client.resolve_roll(&game_id);
 
     let roll = s.dice_client.get_roll(&game_id);
@@ -427,7 +434,8 @@ fn test_double_resolve_rejected() {
     commit_seed(&env, &s.rng_client, &s.oracle, &rng_seed);
     s.dice_client.roll(&player, &1u32, &100, &1u64);
 
-    s.rng_client.fulfill_random(&s.oracle, &1u64, &rng_seed);
+    s.rng_client
+        .fulfill_random(&s.oracle, &s.dice_id, &1u64, &rng_seed);
     s.dice_client.resolve_roll(&1u64);
 
     let result = s.dice_client.try_resolve_roll(&1u64);
@@ -507,7 +515,7 @@ fn test_die_face_mapping() {
         s.dice_client.roll(&player, &target_face, &10, &game_id);
 
         s.rng_client
-            .fulfill_random(&s.oracle, &game_id, &winning_seed);
+            .fulfill_random(&s.oracle, &s.dice_id, &game_id, &winning_seed);
         s.dice_client.resolve_roll(&game_id);
 
         let roll = s.dice_client.get_roll(&game_id);
@@ -538,7 +546,7 @@ fn test_payout_math_250bps() {
     s.dice_client.roll(&player, &prediction, &wager, &game_id);
 
     s.rng_client
-        .fulfill_random(&s.oracle, &game_id, &winning_seed);
+        .fulfill_random(&s.oracle, &s.dice_id, &game_id, &winning_seed);
     s.dice_client.resolve_roll(&game_id);
 
     let roll = s.dice_client.get_roll(&game_id);
@@ -656,7 +664,8 @@ fn test_win_then_loss() {
     let win_seed = find_seed_for_face(&env, 1u64, prediction1);
     commit_seed(&env, &s.rng_client, &s.oracle, &win_seed);
     s.dice_client.roll(&player, &prediction1, &100, &1u64);
-    s.rng_client.fulfill_random(&s.oracle, &1u64, &win_seed);
+    s.rng_client
+        .fulfill_random(&s.oracle, &s.dice_id, &1u64, &win_seed);
     s.dice_client.resolve_roll(&1u64);
 
     let r1 = s.dice_client.get_roll(&1u64);
@@ -676,7 +685,8 @@ fn test_win_then_loss() {
     }
     commit_seed(&env, &s.rng_client, &s.oracle, &lose_seed);
     s.dice_client.roll(&player, &prediction2, &100, &2u64);
-    s.rng_client.fulfill_random(&s.oracle, &2u64, &lose_seed);
+    s.rng_client
+        .fulfill_random(&s.oracle, &s.dice_id, &2u64, &lose_seed);
     s.dice_client.resolve_roll(&2u64);
 
     let r2 = s.dice_client.get_roll(&2u64);
@@ -699,7 +709,8 @@ fn test_predict_face_1_win() {
     let winning_seed = find_seed_for_face(&env, 1u64, 1);
     commit_seed(&env, &s.rng_client, &s.oracle, &winning_seed);
     s.dice_client.roll(&player, &1u32, &100, &1u64);
-    s.rng_client.fulfill_random(&s.oracle, &1u64, &winning_seed);
+    s.rng_client
+        .fulfill_random(&s.oracle, &s.dice_id, &1u64, &winning_seed);
     s.dice_client.resolve_roll(&1u64);
 
     let roll = s.dice_client.get_roll(&1u64);
@@ -719,7 +730,8 @@ fn test_predict_face_6_win() {
     let winning_seed = find_seed_for_face(&env, 1u64, 6);
     commit_seed(&env, &s.rng_client, &s.oracle, &winning_seed);
     s.dice_client.roll(&player, &6u32, &100, &1u64);
-    s.rng_client.fulfill_random(&s.oracle, &1u64, &winning_seed);
+    s.rng_client
+        .fulfill_random(&s.oracle, &s.dice_id, &1u64, &winning_seed);
     s.dice_client.resolve_roll(&1u64);
 
     let roll = s.dice_client.get_roll(&1u64);
@@ -750,7 +762,7 @@ fn test_loss_stores_actual_result() {
     s.dice_client.roll(&player, &prediction, &100, &game_id);
 
     s.rng_client
-        .fulfill_random(&s.oracle, &game_id, &losing_seed);
+        .fulfill_random(&s.oracle, &s.dice_id, &game_id, &losing_seed);
     s.dice_client.resolve_roll(&game_id);
 
     let roll = s.dice_client.get_roll(&game_id);
@@ -792,7 +804,8 @@ fn test_rolling_history_snapshot_after_resolve() {
     let win_seed = find_seed_for_face(&env, game_id, prediction);
     commit_seed(&env, &s.rng_client, &s.oracle, &win_seed);
     s.dice_client.roll(&player, &prediction, &100, &game_id);
-    s.rng_client.fulfill_random(&s.oracle, &game_id, &win_seed);
+    s.rng_client
+        .fulfill_random(&s.oracle, &s.dice_id, &game_id, &win_seed);
     s.dice_client.resolve_roll(&game_id);
 
     let snap = s.dice_client.rolling_history_snapshot();
