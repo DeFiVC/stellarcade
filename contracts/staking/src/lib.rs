@@ -193,9 +193,19 @@ impl Staking {
 
         // Calculate pending rewards before updating position
         if position.amount > 0 {
-            let pending =
-                (position.amount * state.reward_per_share_acc / PRECISION) - position.reward_debt;
-            position.pending_rewards += pending;
+            let accumulated = position
+                .amount
+                .checked_mul(state.reward_per_share_acc)
+                .ok_or(Error::Overflow)?
+                .checked_div(PRECISION)
+                .ok_or(Error::Overflow)?;
+            let pending = accumulated
+                .checked_sub(position.reward_debt)
+                .ok_or(Error::Overflow)?;
+            position.pending_rewards = position
+                .pending_rewards
+                .checked_add(pending)
+                .ok_or(Error::Overflow)?;
         }
 
         // Transfer tokens from user
@@ -205,12 +215,23 @@ impl Staking {
             .get(&DataKey::StakingToken)
             .unwrap();
         let token_client = token::Client::new(&env, &staking_token);
-        token_client.transfer(&user, &env.current_contract_address(), &amount);
+        token_client.transfer(&user, env.current_contract_address(), &amount);
 
         // Update position and state
-        position.amount += amount;
-        position.reward_debt = position.amount * state.reward_per_share_acc / PRECISION;
-        state.total_staked += amount;
+        position.amount = position
+            .amount
+            .checked_add(amount)
+            .ok_or(Error::Overflow)?;
+        position.reward_debt = position
+            .amount
+            .checked_mul(state.reward_per_share_acc)
+            .ok_or(Error::Overflow)?
+            .checked_div(PRECISION)
+            .ok_or(Error::Overflow)?;
+        state.total_staked = state
+            .total_staked
+            .checked_add(amount)
+            .ok_or(Error::Overflow)?;
 
         env.storage()
             .persistent()
@@ -245,18 +266,39 @@ impl Staking {
         let mut state: GlobalState = env.storage().instance().get(&DataKey::GlobalState).unwrap();
 
         // Calculate pending rewards
-        let pending =
-            (position.amount * state.reward_per_share_acc / PRECISION) - position.reward_debt;
-        position.pending_rewards += pending;
+        let accumulated = position
+            .amount
+            .checked_mul(state.reward_per_share_acc)
+            .ok_or(Error::Overflow)?
+            .checked_div(PRECISION)
+            .ok_or(Error::Overflow)?;
+        let pending = accumulated
+            .checked_sub(position.reward_debt)
+            .ok_or(Error::Overflow)?;
+        position.pending_rewards = position
+            .pending_rewards
+            .checked_add(pending)
+            .ok_or(Error::Overflow)?;
 
         // Update position and state
-        position.amount -= amount;
+        position.amount = position
+            .amount
+            .checked_sub(amount)
+            .ok_or(Error::Overflow)?;
         position.reward_debt = if position.amount > 0 {
-            position.amount * state.reward_per_share_acc / PRECISION
+            position
+                .amount
+                .checked_mul(state.reward_per_share_acc)
+                .ok_or(Error::Overflow)?
+                .checked_div(PRECISION)
+                .ok_or(Error::Overflow)?
         } else {
             0
         };
-        state.total_staked -= amount;
+        state.total_staked = state
+            .total_staked
+            .checked_sub(amount)
+            .ok_or(Error::Overflow)?;
 
         // Transfer tokens back to user
         let staking_token: Address = env
@@ -294,9 +336,19 @@ impl Staking {
             .get(&DataKey::Position(user.clone()))
             .ok_or(Error::InvalidAmount)?;
 
-        let pending =
-            (position.amount * state.reward_per_share_acc / PRECISION) - position.reward_debt;
-        let total_claimable = position.pending_rewards + pending;
+        let accumulated = position
+            .amount
+            .checked_mul(state.reward_per_share_acc)
+            .ok_or(Error::Overflow)?
+            .checked_div(PRECISION)
+            .ok_or(Error::Overflow)?;
+        let pending = accumulated
+            .checked_sub(position.reward_debt)
+            .ok_or(Error::Overflow)?;
+        let total_claimable = position
+            .pending_rewards
+            .checked_add(pending)
+            .ok_or(Error::Overflow)?;
 
         if total_claimable <= 0 {
             return Ok(0);
@@ -310,7 +362,12 @@ impl Staking {
 
         // Reset user rewards
         position.pending_rewards = 0;
-        position.reward_debt = position.amount * state.reward_per_share_acc / PRECISION;
+        position.reward_debt = position
+            .amount
+            .checked_mul(state.reward_per_share_acc)
+            .ok_or(Error::Overflow)?
+            .checked_div(PRECISION)
+            .ok_or(Error::Overflow)?;
         position.last_claim_timestamp = env.ledger().timestamp();
 
         // Transfer reward tokens
@@ -334,41 +391,17 @@ impl Staking {
 
     /// View user position.
     pub fn position_of(env: Env, user: Address) -> UserPosition {
-        let mut position: UserPosition = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Position(user.clone()))
-            .unwrap_or(UserPosition {
-                amount: 0,
-                reward_debt: 0,
-                pending_rewards: 0,
-                last_claim_timestamp: 0,
-            });
-
-        // Calculate dynamic pending rewards for the view call
-        if let Some(mut state) = env
-            .storage()
-            .instance()
-            .get::<_, GlobalState>(&DataKey::GlobalState)
-        {
-            let timestamp = env.ledger().timestamp();
-            if timestamp > state.last_update_timestamp && state.total_staked > 0 {
-                let duration = (timestamp - state.last_update_timestamp) as i128;
-                let rewards = duration * state.reward_rate;
-                state.reward_per_share_acc += rewards * PRECISION / state.total_staked;
-            }
-            let pending =
-                (position.amount * state.reward_per_share_acc / PRECISION) - position.reward_debt;
-            position.pending_rewards += pending;
+        match Self::state_at_current_ledger(&env) {
+            Ok(state) => Self::position_with_dynamic_rewards(&env, &state, user.clone())
+                .unwrap_or_else(|_| Self::position_or_default(&env, user)),
+            Err(_) => Self::position_or_default(&env, user),
         }
-
-        position
     }
 
     /// Preview pending rewards and current claimability without mutating state.
     pub fn preview_rewards(env: Env, user: Address) -> Result<RewardPreview, Error> {
         let state = Self::state_at_current_ledger(&env)?;
-        let position = Self::position_with_dynamic_rewards(&env, &state, user);
+        let position = Self::position_with_dynamic_rewards(&env, &state, user)?;
         let claimability =
             Self::build_claim_eligibility(env.ledger().timestamp(), position.last_claim_timestamp);
 
@@ -412,21 +445,23 @@ impl Staking {
 
         if state.total_staked > 0 {
             let duration = (timestamp - state.last_update_timestamp) as i128;
-            let rewards = duration * state.reward_rate;
-            state.reward_per_share_acc += rewards * PRECISION / state.total_staked;
+            let rewards = duration
+                .checked_mul(state.reward_rate)
+                .ok_or(Error::Overflow)?;
+            let scaled = rewards.checked_mul(PRECISION).ok_or(Error::Overflow)?;
+            let delta = scaled
+                .checked_div(state.total_staked)
+                .ok_or(Error::Overflow)?;
+            state.reward_per_share_acc = state
+                .reward_per_share_acc
+                .checked_add(delta)
+                .ok_or(Error::Overflow)?;
         }
 
         state.last_update_timestamp = timestamp;
         env.storage().instance().set(&DataKey::GlobalState, &state);
 
         Ok(())
-    }
-
-    fn require_initialized(env: &Env) -> Result<Address, Error> {
-        env.storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(Error::NotInitialized)
     }
 
     fn state_at_current_ledger(env: &Env) -> Result<GlobalState, Error> {
@@ -439,8 +474,17 @@ impl Staking {
 
         if timestamp > state.last_update_timestamp && state.total_staked > 0 {
             let duration = (timestamp - state.last_update_timestamp) as i128;
-            let rewards = duration * state.reward_rate;
-            state.reward_per_share_acc += rewards * PRECISION / state.total_staked;
+            let rewards = duration
+                .checked_mul(state.reward_rate)
+                .ok_or(Error::Overflow)?;
+            let scaled = rewards.checked_mul(PRECISION).ok_or(Error::Overflow)?;
+            let delta = scaled
+                .checked_div(state.total_staked)
+                .ok_or(Error::Overflow)?;
+            state.reward_per_share_acc = state
+                .reward_per_share_acc
+                .checked_add(delta)
+                .ok_or(Error::Overflow)?;
             state.last_update_timestamp = timestamp;
         }
 
@@ -463,12 +507,22 @@ impl Staking {
         env: &Env,
         state: &GlobalState,
         user: Address,
-    ) -> UserPosition {
+    ) -> Result<UserPosition, Error> {
         let mut position = Self::position_or_default(env, user);
-        let pending =
-            (position.amount * state.reward_per_share_acc / PRECISION) - position.reward_debt;
-        position.pending_rewards += pending;
-        position
+        let accumulated = position
+            .amount
+            .checked_mul(state.reward_per_share_acc)
+            .ok_or(Error::Overflow)?
+            .checked_div(PRECISION)
+            .ok_or(Error::Overflow)?;
+        let pending = accumulated
+            .checked_sub(position.reward_debt)
+            .ok_or(Error::Overflow)?;
+        position.pending_rewards = position
+            .pending_rewards
+            .checked_add(pending)
+            .ok_or(Error::Overflow)?;
+        Ok(position)
     }
 
     fn build_claim_eligibility(now: u64, last_claim_timestamp: u64) -> ClaimEligibility {
@@ -481,9 +535,7 @@ impl Staking {
             };
         }
 
-        let next_claim_timestamp = last_claim_timestamp
-            .checked_add(CLAIM_COOLDOWN_SECONDS)
-            .unwrap_or(u64::MAX);
+        let next_claim_timestamp = last_claim_timestamp.saturating_add(CLAIM_COOLDOWN_SECONDS);
         if now >= next_claim_timestamp {
             ClaimEligibility {
                 eligible_now: true,
@@ -534,8 +586,12 @@ mod test {
         let user1 = Address::generate(&env);
         let user2 = Address::generate(&env);
 
-        let staking_token_addr = env.register_stellar_asset_contract(Address::generate(&env));
-        let reward_token_addr = env.register_stellar_asset_contract(Address::generate(&env));
+        let staking_token_addr = env
+            .register_stellar_asset_contract_v2(Address::generate(&env))
+            .address();
+        let reward_token_addr = env
+            .register_stellar_asset_contract_v2(Address::generate(&env))
+            .address();
 
         let staking_token = token::StellarAssetClient::new(&env, &staking_token_addr);
         let reward_token = token::StellarAssetClient::new(&env, &reward_token_addr);
