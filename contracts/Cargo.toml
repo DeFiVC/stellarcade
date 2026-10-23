@@ -101,6 +101,9 @@ members = [
     "lending-pool",
     "quest-redeemer",
     "reserve-manager",
+    "speed-trivia",
+    "staking",
+    "tournament-system",
 ]
 
 exclude = [
@@ -156,12 +159,9 @@ exclude = [
     "round-vouchers",
     "season-rewards-vault",
     "session-nonce-manager",
-    "speed-trivia",
     "squad-match",
     "squad-rewards",
     "squad-roster",
-    "staking",
-    "tournament-system",
     "trivia-game",
     "upgrade-mechanism",
     "wallet-claims-v2",
